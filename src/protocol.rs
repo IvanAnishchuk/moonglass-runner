@@ -18,6 +18,7 @@ pub struct CaseRequest {
 
 impl CaseRequest {
     pub fn parse(line: &str) -> Result<Self, String> {
+        let line = line.trim_end_matches(['\r', '\n']);
         let f: Vec<&str> = line.split('\t').collect();
         if f.len() != 10 {
             return Err(format!("expected 10 fields, got {}", f.len()));
@@ -103,5 +104,41 @@ mod tests {
     fn verdict_lines_are_single_line_tab_separated() {
         let v = Verdict::fail("mismatch", "post root differs\tweird\ndetail");
         assert_eq!(v.line(), "fail\tmismatch\tpost root differs weird detail");
+    }
+
+    #[test]
+    fn trailing_newline_does_not_corrupt_the_last_field() {
+        let line = "operations\tattestation\t/t/pre.ssz\t/t/post.ssz\t1\t0\t-\t/t/op.ssz\t-\t1\n";
+        let r = CaseRequest::parse(line).unwrap();
+        assert!(r.execution_valid);
+    }
+
+    #[test]
+    fn multiple_inputs_split_on_commas() {
+        let line = "operations\tattestation\t/t/pre.ssz\t/t/post.ssz\t1\t0\t-\t/t/a.ssz,/t/b.ssz,/t/c.ssz\t-\t1";
+        let r = CaseRequest::parse(line).unwrap();
+        assert_eq!(r.inputs.len(), 3);
+        assert_eq!(r.inputs[1], std::path::PathBuf::from("/t/b.ssz"));
+    }
+
+    #[test]
+    fn numeric_optionals_parse_and_reject() {
+        let ok_line = "operations\tattestation\t-\t-\t0\t0\t7\t\t-\t0";
+        let r = CaseRequest::parse(ok_line).unwrap();
+        assert_eq!(r.fork_epoch, Some(7));
+
+        let bad_line = "operations\tattestation\t-\t-\t0\t0\tx\t\t-\t0";
+        assert!(CaseRequest::parse(bad_line).is_err());
+    }
+
+    #[test]
+    fn bad_bls_setting_is_an_error() {
+        let line = "operations\tattestation\t-\t-\tx\t0\t-\t\t-\t0";
+        assert!(CaseRequest::parse(line).is_err());
+    }
+
+    #[test]
+    fn pass_verdict_line_format() {
+        assert_eq!(Verdict::pass("ok", "").line(), "pass\tok\t");
     }
 }
