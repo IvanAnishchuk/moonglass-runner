@@ -20,6 +20,8 @@ etheorem's published behavior.
 moonglass-runner <fork> <preset>
 ```
 
+The preset is fixed at compile time via cargo features; the `<preset>` argument is validated against the build, not used to select it (this mirrors the `pyspec_server <fork> <preset>` invocation contract).
+
 ## License
 
 AGPL-3.0-only — same as upstream `brech1/moonglass`.
