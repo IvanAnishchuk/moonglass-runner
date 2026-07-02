@@ -1,3 +1,4 @@
+mod operations;
 mod protocol;
 
 fn main() {
