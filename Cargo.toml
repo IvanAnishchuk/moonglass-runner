@@ -1,0 +1,14 @@
+[package]
+name = "moonglass-runner"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "pyspec_server-protocol conformance runner backed by moonglass-core"
+
+[features]
+default = ["mainnet"]
+mainnet = ["moonglass-core/mainnet"]
+minimal = ["moonglass-core/minimal"]
+
+[dependencies]
+moonglass-core = { git = "https://github.com/brech1/moonglass", rev = "7a1cfea", default-features = false }
