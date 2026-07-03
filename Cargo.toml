@@ -15,6 +15,18 @@ default = ["mainnet"]
 mainnet = ["moonglass-core/mainnet"]
 minimal = ["moonglass-core/minimal"]
 
+# One bin target per preset (à la moonglass's reftests-minimal): the names never
+# collide, so building one preset cannot silently clobber the other's binary.
+[[bin]]
+name = "moonglass-runner-mainnet"
+path = "src/main.rs"
+required-features = ["mainnet"]
+
+[[bin]]
+name = "moonglass-runner-minimal"
+path = "src/main.rs"
+required-features = ["minimal"]
+
 [dependencies]
 moonglass-core = { git = "https://github.com/brech1/moonglass", rev = "7a1cfea", default-features = false }
 

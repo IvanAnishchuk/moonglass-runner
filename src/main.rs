@@ -12,6 +12,9 @@ use std::io::{BufRead, Write};
 /// Preset compiled into this binary (`minimal` or `mainnet`).
 const COMPILED_PRESET: &str = if cfg!(feature = "minimal") { "minimal" } else { "mainnet" };
 
+/// This bin target's name — one target per preset, see `[[bin]]` in Cargo.toml.
+const BIN_NAME: &str = env!("CARGO_BIN_NAME");
+
 /// Parse one request line, dispatch to the matching runner, return a verdict.
 fn respond(line: &str) -> Verdict {
     match CaseRequest::parse(line) {
@@ -28,7 +31,7 @@ fn main() {
     // Invocation mirrors `pyspec_server <fork> <preset>`.
     if args.len() != 3 || args[1] != "gloas" || args[2] != COMPILED_PRESET {
         eprintln!(
-            "usage: moonglass-runner gloas {COMPILED_PRESET} (this build supports only fork=gloas preset={COMPILED_PRESET})"
+            "usage: {BIN_NAME} gloas {COMPILED_PRESET} (this build supports only fork=gloas preset={COMPILED_PRESET})"
         );
         std::process::exit(2);
     }
