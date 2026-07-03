@@ -14,13 +14,23 @@ For each case the runner writes one response line on stdout:
 The protocol is documented canonically in the design doc and reimplemented from
 etheorem's published behavior.
 
+## Building
+
+One bin target per preset, so the binaries never collide and a default build cannot
+silently replace a minimal one:
+
+```
+cargo build --release                                              # target/release/moonglass-runner-mainnet
+cargo build --release --no-default-features --features minimal     # target/release/moonglass-runner-minimal
+```
+
 ## Usage
 
 ```
-moonglass-runner <fork> <preset>
+moonglass-runner-<preset> <fork> <preset>
 ```
 
-The preset is fixed at compile time via cargo features; the `<preset>` argument is validated against the build, not used to select it (this mirrors the `pyspec_server <fork> <preset>` invocation contract).
+The preset is fixed at compile time via cargo features; the `<preset>` argument is validated against the build, not used to select it (this mirrors the `pyspec_server <fork> <preset>` invocation contract). A mismatched `<preset>` argument fails loudly with exit code 2.
 
 ## License
 

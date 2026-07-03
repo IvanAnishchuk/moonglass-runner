@@ -9,8 +9,26 @@ mod protocol;
 use protocol::{CaseRequest, Verdict};
 use std::io::{BufRead, Write};
 
+// The exactly-one-preset contract, stated at this crate's boundary. In practice
+// moonglass-core fails such builds first (duplicate preset consts + its own guard);
+// this keeps the contract local in case that upstream detail ever changes.
+#[cfg(all(feature = "mainnet", feature = "minimal"))]
+compile_error!(
+    "enable exactly one preset feature: `--no-default-features --features minimal` or \
+     `--no-default-features --features mainnet` (a bare `--features minimal` keeps the \
+     default mainnet feature on too)"
+);
+#[cfg(not(any(feature = "mainnet", feature = "minimal")))]
+compile_error!(
+    "enable exactly one preset feature: after `--no-default-features`, add \
+     `--features minimal` or `--features mainnet`"
+);
+
 /// Preset compiled into this binary (`minimal` or `mainnet`).
 const COMPILED_PRESET: &str = if cfg!(feature = "minimal") { "minimal" } else { "mainnet" };
+
+/// This bin target's name — one target per preset, see `[[bin]]` in Cargo.toml.
+const BIN_NAME: &str = env!("CARGO_BIN_NAME");
 
 /// Parse one request line, dispatch to the matching runner, return a verdict.
 fn respond(line: &str) -> Verdict {
@@ -28,7 +46,7 @@ fn main() {
     // Invocation mirrors `pyspec_server <fork> <preset>`.
     if args.len() != 3 || args[1] != "gloas" || args[2] != COMPILED_PRESET {
         eprintln!(
-            "usage: moonglass-runner gloas {COMPILED_PRESET} (this build supports only fork=gloas preset={COMPILED_PRESET})"
+            "usage: {BIN_NAME} gloas {COMPILED_PRESET} (this build supports only fork=gloas preset={COMPILED_PRESET})"
         );
         std::process::exit(2);
     }
