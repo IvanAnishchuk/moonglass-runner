@@ -9,6 +9,17 @@ mod protocol;
 use protocol::{CaseRequest, Verdict};
 use std::io::{BufRead, Write};
 
+// The exactly-one-preset contract, stated at this crate's boundary. In practice
+// moonglass-core fails such builds first (duplicate preset consts + its own guard);
+// this keeps the contract local in case that upstream detail ever changes.
+#[cfg(all(feature = "mainnet", feature = "minimal"))]
+compile_error!(
+    "enable exactly one preset feature: `--no-default-features --features minimal|mainnet` \
+     (a bare `--features minimal` keeps the default mainnet feature on too)"
+);
+#[cfg(not(any(feature = "mainnet", feature = "minimal")))]
+compile_error!("enable exactly one preset feature: `--features minimal` or `--features mainnet`");
+
 /// Preset compiled into this binary (`minimal` or `mainnet`).
 const COMPILED_PRESET: &str = if cfg!(feature = "minimal") { "minimal" } else { "mainnet" };
 
