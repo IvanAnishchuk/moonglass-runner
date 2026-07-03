@@ -1,9 +1,13 @@
 [package]
 name = "moonglass-runner"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "AGPL-3.0-only"
 description = "pyspec_server-protocol conformance runner backed by moonglass-core"
+repository = "https://github.com/IvanAnishchuk/moonglass-runner"
+readme = "README.md"
+keywords = ["ethereum", "consensus", "ssz", "conformance", "testing"]
+categories = ["command-line-utilities", "development-tools::testing"]
 publish = false
 
 [features]
@@ -13,3 +17,21 @@ minimal = ["moonglass-core/minimal"]
 
 [dependencies]
 moonglass-core = { git = "https://github.com/brech1/moonglass", rev = "7a1cfea", default-features = false }
+
+[lints.rust]
+dead_code = "deny"
+missing_docs = "deny"
+unreachable_pub = "deny"
+unused = { level = "deny", priority = -1 }
+unsafe_code = "forbid"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+unescaped_backticks = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+cargo_common_metadata = "deny"
+missing_docs_in_private_items = "deny"
+missing_errors_doc = "allow"

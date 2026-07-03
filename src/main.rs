@@ -1,11 +1,18 @@
+//! `moonglass-runner`: pyspec_server-protocol conformance runner backed by moonglass-core.
+//!
+//! Reads tab-delimited case requests from stdin and writes `pass|fail` verdict
+//! lines to stdout, one per line, following the `pyspec_server` wire protocol.
+
 mod operations;
 mod protocol;
 
 use protocol::{CaseRequest, Verdict};
 use std::io::{BufRead, Write};
 
+/// Preset compiled into this binary (`minimal` or `mainnet`).
 const COMPILED_PRESET: &str = if cfg!(feature = "minimal") { "minimal" } else { "mainnet" };
 
+/// Parse one request line, dispatch to the matching runner, return a verdict.
 fn respond(line: &str) -> Verdict {
     match CaseRequest::parse(line) {
         Ok(req) => match req.runner.as_str() {
@@ -39,7 +46,7 @@ fn main() {
                 |payload| {
                     let msg = payload
                         .downcast_ref::<&str>()
-                        .map(|s| s.to_string())
+                        .map(std::string::ToString::to_string)
                         .or_else(|| payload.downcast_ref::<String>().cloned())
                         .unwrap_or_else(|| "non-string panic payload".to_string());
                     Verdict::fail("bug", format!("panic: {msg}"))

@@ -15,21 +15,15 @@ use moonglass_core::ssz::{Deserialize, Serialize};
 /// Pure verdict table. `result` is the transition outcome (error stringified),
 /// `got_post` the canonical SSZ of the resulting state, `expected_post` the
 /// expected-post file bytes (None = the vector is invalid, a reject is expected).
-pub fn classify(
+pub(crate) fn classify(
     result: Result<(), String>,
-    got_post: Vec<u8>,
-    expected_post: Option<Vec<u8>>,
+    got_post: &[u8],
+    expected_post: Option<&[u8]>,
 ) -> Verdict {
     match (result, expected_post) {
         (Ok(()), Some(exp)) if got_post == exp => Verdict::pass("ok", ""),
         (Ok(()), Some(exp)) => {
-            let detail = if got_post.len() != exp.len() {
-                format!(
-                    "post differs: got {} B, want {} B",
-                    got_post.len(),
-                    exp.len()
-                )
-            } else {
+            let detail = if got_post.len() == exp.len() {
                 let offset = got_post
                     .iter()
                     .zip(exp.iter())
@@ -40,6 +34,12 @@ pub fn classify(
                     got_post.len(),
                     exp.len(),
                     offset
+                )
+            } else {
+                format!(
+                    "post differs: got {} B, want {} B",
+                    got_post.len(),
+                    exp.len()
                 )
             };
             Verdict::fail("mismatch", detail)
@@ -67,7 +67,9 @@ where
 /// How a handler consumes the case: with an SSZ-encoded input object, or purely
 /// from the pre-state (no extra input bytes needed).
 enum Dispatch {
+    /// Handler that takes the state and raw SSZ bytes for one operation.
     Input(fn(&mut BeaconState, &[u8]) -> Result<(), String>),
+    /// Handler that transforms the state with no additional input.
     StateOnly(fn(&mut BeaconState) -> Result<(), String>),
 }
 
@@ -158,7 +160,7 @@ fn dispatch_for(handler: &str) -> Option<Dispatch> {
 /// same license as this crate). `bls_setting` == 2 (BLS-disabled) has no
 /// verify-off path in moonglass-core, so those cases are marked todo rather
 /// than scored as false failures.
-pub fn run(req: &CaseRequest) -> Verdict {
+pub(crate) fn run(req: &CaseRequest) -> Verdict {
     // `bls_setting` == 2 means BLS-disabled execution; moonglass-core has no
     // verify-off path for any handler, so push to the xfail/todo bucket.
     if req.bls_setting == 2 {
@@ -205,10 +207,10 @@ pub fn run(req: &CaseRequest) -> Verdict {
     // be in a partial/inconsistent state and got_post is unused by classify
     // when result is Err.
     let mut got_post = Vec::new();
-    if result.is_ok() {
-        if let Err(e) = state.serialize(&mut got_post) {
-            return Verdict::fail("bug", format!("serialize post: {e}"));
-        }
+    if result.is_ok()
+        && let Err(e) = state.serialize(&mut got_post)
+    {
+        return Verdict::fail("bug", format!("serialize post: {e}"));
     }
 
     let expected_post = match &req.post {
@@ -219,7 +221,7 @@ pub fn run(req: &CaseRequest) -> Verdict {
         None => None,
     };
 
-    classify(result, got_post, expected_post)
+    classify(result, &got_post, expected_post.as_deref())
 }
 
 #[cfg(test)]
@@ -246,13 +248,13 @@ mod tests {
 
     #[test]
     fn valid_vector_with_matching_post_passes() {
-        let v = classify(Ok(()), b"abc".to_vec(), Some(b"abc".to_vec()));
+        let v = classify(Ok(()), b"abc", Some(b"abc"));
         assert_eq!(v.line(), "pass\tok\t");
     }
 
     #[test]
     fn valid_vector_with_differing_post_fails_as_mismatch() {
-        let v = classify(Ok(()), b"abc".to_vec(), Some(b"abd".to_vec()));
+        let v = classify(Ok(()), b"abc", Some(b"abd"));
         assert!(v.line().starts_with("fail\tmismatch\t"));
         // Equal lengths → first-diff offset is included in the detail.
         assert!(v.line().contains("first diff at byte 2"));
@@ -260,7 +262,7 @@ mod tests {
 
     #[test]
     fn mismatch_detail_shows_lengths_when_different() {
-        let v = classify(Ok(()), b"short".to_vec(), Some(b"longer_expected".to_vec()));
+        let v = classify(Ok(()), b"short", Some(b"longer_expected"));
         let line = v.line();
         assert!(line.starts_with("fail\tmismatch\t"));
         assert!(line.contains("got 5 B"));
@@ -270,20 +272,20 @@ mod tests {
 
     #[test]
     fn invalid_vector_rejected_passes() {
-        let v = classify(Err("bad sig".to_string()), Vec::new(), None);
+        let v = classify(Err("bad sig".to_string()), &[], None);
         assert!(v.line().starts_with("pass\treject\t"));
         assert!(v.line().ends_with("bad sig"));
     }
 
     #[test]
     fn invalid_vector_accepted_fails() {
-        let v = classify(Ok(()), b"abc".to_vec(), None);
+        let v = classify(Ok(()), b"abc", None);
         assert!(v.line().starts_with("fail\taccept-invalid\t"));
     }
 
     #[test]
     fn valid_vector_rejected_fails() {
-        let v = classify(Err("spurious".to_string()), Vec::new(), Some(b"abc".to_vec()));
+        let v = classify(Err("spurious".to_string()), &[], Some(b"abc"));
         assert!(v.line().starts_with("fail\treject-valid\t"));
         assert!(v.line().ends_with("spurious"));
     }

@@ -1,23 +1,43 @@
-//! The pyspec_server wire protocol: one tab-separated request line in, one
+//! The `pyspec_server` wire protocol: one tab-separated request line in, one
 //! `pass|fail\t<bucket>\t<detail>` line out. `-` marks an absent field.
 
 use std::path::PathBuf;
 
-pub struct CaseRequest {
-    pub runner: String,
-    pub handler: String,
-    pub pre: Option<PathBuf>,
-    pub post: Option<PathBuf>,
-    pub bls_setting: u8,
-    pub blocks_count: usize,
-    pub fork_epoch: Option<u64>,
-    pub inputs: Vec<PathBuf>,
-    pub fork_block: Option<u64>,
-    pub execution_valid: bool,
+/// A single `pyspec_server` request decoded from one tab-delimited stdin line.
+pub(crate) struct CaseRequest {
+    /// Test runner name (e.g. `operations`).
+    pub(crate) runner: String,
+    /// Handler within the runner (e.g. `attestation`).
+    pub(crate) handler: String,
+    /// Path to the pre-state SSZ file; `None` when absent (`-` on the wire).
+    pub(crate) pre: Option<PathBuf>,
+    /// Path to the expected post-state SSZ file; `None` for invalid-vector cases.
+    pub(crate) post: Option<PathBuf>,
+    /// BLS setting flag from the wire protocol (0 = BLS on, 2 = BLS off).
+    pub(crate) bls_setting: u8,
+    /// Number of blocks in the test vector (M1 runners; unused by operations).
+    // TODO(M1, ivan-epf-research#37): consumed by the non-operations runners.
+    #[allow(dead_code)]
+    pub(crate) blocks_count: usize,
+    /// Fork epoch override; `None` when absent.
+    // TODO(M1, ivan-epf-research#37): consumed by the non-operations runners.
+    #[allow(dead_code)]
+    pub(crate) fork_epoch: Option<u64>,
+    /// Ordered list of additional input files (one operation per entry for operations tests).
+    pub(crate) inputs: Vec<PathBuf>,
+    /// Fork block override; `None` when absent.
+    // TODO(M1, ivan-epf-research#37): consumed by the non-operations runners.
+    #[allow(dead_code)]
+    pub(crate) fork_block: Option<u64>,
+    /// Whether the execution payload is expected to be valid (M1 runners).
+    // TODO(M1, ivan-epf-research#37): consumed by the non-operations runners.
+    #[allow(dead_code)]
+    pub(crate) execution_valid: bool,
 }
 
 impl CaseRequest {
-    pub fn parse(line: &str) -> Result<Self, String> {
+    /// Parse one tab-delimited `pyspec_server` request line into a [`CaseRequest`].
+    pub(crate) fn parse(line: &str) -> Result<Self, String> {
         let line = line.trim_end_matches(['\r', '\n']);
         let f: Vec<&str> = line.split('\t').collect();
         if f.len() != 10 {
@@ -25,7 +45,11 @@ impl CaseRequest {
         }
         let opt_path = |s: &str| (s != "-").then(|| PathBuf::from(s));
         let opt_u64 = |s: &str| -> Result<Option<u64>, String> {
-            if s == "-" { Ok(None) } else { s.parse().map(Some).map_err(|e| format!("bad u64: {e}")) }
+            if s == "-" {
+                Ok(None)
+            } else {
+                s.parse().map(Some).map_err(|e| format!("bad u64: {e}"))
+            }
         };
         Ok(Self {
             runner: f[0].to_string(),
@@ -35,35 +59,52 @@ impl CaseRequest {
             bls_setting: f[4].parse().map_err(|e| format!("bad bls_setting: {e}"))?,
             blocks_count: f[5].parse().map_err(|e| format!("bad blocks_count: {e}"))?,
             fork_epoch: opt_u64(f[6])?,
-            inputs: if f[7].is_empty() { Vec::new() } else { f[7].split(',').map(PathBuf::from).collect() },
+            inputs: if f[7].is_empty() {
+                Vec::new()
+            } else {
+                f[7].split(',').map(PathBuf::from).collect()
+            },
             fork_block: opt_u64(f[8])?,
             execution_valid: f[9] == "1",
         })
     }
 }
 
-pub struct Verdict {
+/// A single `pyspec_server` response: pass or fail with a bucket tag and detail.
+pub(crate) struct Verdict {
+    /// Whether the test case passed.
     passed: bool,
+    /// Short tag classifying the outcome (e.g. `ok`, `mismatch`, `todo`).
     bucket: &'static str,
+    /// Human-readable detail appended after the bucket on the wire.
     detail: String,
 }
 
 impl Verdict {
-    pub fn pass(bucket: &'static str, detail: impl Into<String>) -> Self {
+    /// Construct a passing verdict.
+    pub(crate) fn pass(bucket: &'static str, detail: impl Into<String>) -> Self {
         Self { passed: true, bucket, detail: detail.into() }
     }
-    pub fn fail(bucket: &'static str, detail: impl Into<String>) -> Self {
+
+    /// Construct a failing verdict.
+    pub(crate) fn fail(bucket: &'static str, detail: impl Into<String>) -> Self {
         Self { passed: false, bucket, detail: detail.into() }
     }
+
     /// One response line; detail is flattened so it can never break the framing.
-    pub fn line(&self) -> String {
+    pub(crate) fn line(&self) -> String {
         let detail: String = self
             .detail
             .split(['\t', '\n', '\r'])
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join(" ");
-        format!("{}\t{}\t{}", if self.passed { "pass" } else { "fail" }, self.bucket, detail)
+        format!(
+            "{}\t{}\t{}",
+            if self.passed { "pass" } else { "fail" },
+            self.bucket,
+            detail
+        )
     }
 }
 
