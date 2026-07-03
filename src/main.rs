@@ -14,11 +14,15 @@ use std::io::{BufRead, Write};
 // this keeps the contract local in case that upstream detail ever changes.
 #[cfg(all(feature = "mainnet", feature = "minimal"))]
 compile_error!(
-    "enable exactly one preset feature: `--no-default-features --features minimal|mainnet` \
-     (a bare `--features minimal` keeps the default mainnet feature on too)"
+    "enable exactly one preset feature: `--no-default-features --features minimal` or \
+     `--no-default-features --features mainnet` (a bare `--features minimal` keeps the \
+     default mainnet feature on too)"
 );
 #[cfg(not(any(feature = "mainnet", feature = "minimal")))]
-compile_error!("enable exactly one preset feature: `--features minimal` or `--features mainnet`");
+compile_error!(
+    "enable exactly one preset feature: after `--no-default-features`, add \
+     `--features minimal` or `--features mainnet`"
+);
 
 /// Preset compiled into this binary (`minimal` or `mainnet`).
 const COMPILED_PRESET: &str = if cfg!(feature = "minimal") { "minimal" } else { "mainnet" };
