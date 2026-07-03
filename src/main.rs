@@ -6,6 +6,16 @@ use std::io::{BufRead, Write};
 
 const COMPILED_PRESET: &str = if cfg!(feature = "minimal") { "minimal" } else { "mainnet" };
 
+fn respond(line: &str) -> Verdict {
+    match CaseRequest::parse(line) {
+        Ok(req) => match req.runner.as_str() {
+            "operations" => operations::run(&req),
+            other => Verdict::fail("todo", format!("unsupported runner {other}")),
+        },
+        Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     // Invocation mirrors `pyspec_server <fork> <preset>`.
@@ -18,18 +28,25 @@ fn main() {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
+        // A stdin read error is fatal (harness will respawn); a parse error answers fail-bug and continues.
         let Ok(line) = line else { break };
         if line.is_empty() {
             continue;
         }
-        let verdict = match CaseRequest::parse(&line) {
-            Ok(req) => match req.runner.as_str() {
-                "operations" => operations::run(&req),
-                other => Verdict::fail("todo", format!("unsupported runner {other}")),
-            },
-            Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
-        };
-        let _ = writeln!(stdout, "{}", verdict.line());
-        let _ = stdout.flush();
+        // AssertUnwindSafe: captures only &line; per-case state is discarded on panic, so this is sound.
+        let verdict =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| respond(&line))).unwrap_or_else(
+                |payload| {
+                    let msg = payload
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or_else(|| payload.downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "non-string panic payload".to_string());
+                    Verdict::fail("bug", format!("panic: {msg}"))
+                },
+            );
+        if writeln!(stdout, "{}", verdict.line()).is_err() || stdout.flush().is_err() {
+            break;
+        }
     }
 }
