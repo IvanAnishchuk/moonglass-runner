@@ -1,0 +1,18 @@
+# Gemini Code Assist configuration for moonglass-runner.
+# Schema: https://docs.cloud.google.com/gemini/docs/code-review/customize-repo-review
+# Review rules live alongside this file in .gemini/styleguide.md.
+
+have_fun: false
+
+# The lock file is pinned dependency noise, not hand-reviewable.
+ignore_patterns:
+  - "Cargo.lock"
+
+code_review:
+  disable: false
+  comment_severity_threshold: MEDIUM
+  max_review_comments: -1
+  pull_request_opened:
+    summary: true
+    code_review: true
+    include_drafts: false

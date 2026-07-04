@@ -14,6 +14,16 @@ For each case the runner writes one response line on stdout:
 The protocol is documented canonically in the design doc and reimplemented from
 etheorem's published behavior.
 
+## Runner status
+
+| Runner | Status | Wire answer |
+|---|---|---|
+| `operations` | implemented | `pass ok`, `pass reject`, `fail mismatch`, `fail reject-valid`, `fail accept-invalid`, `fail todo`, `fail bug` |
+| `epoch_processing`, `finality`, `fork_choice`, `random`, `rewards`, `sanity`, `ssz_static` | planned | `fail todo` |
+| `fork`, `genesis`, `transition` | unmodeled upstream (no moonglass-core API by design) | `fail skip` |
+
+An unknown first field answers `fail todo` with an "unsupported verb" detail. `fail bug` covers harness-contract violations generally: malformed lines of implemented runners, file I/O errors, pre-state decode failures, panics.
+
 ## Building
 
 One bin target per preset, so the binaries never collide and a default build cannot
