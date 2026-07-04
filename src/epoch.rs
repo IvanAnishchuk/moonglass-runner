@@ -47,8 +47,8 @@ fn dispatch_for(handler: &str) -> Option<EpochPhase> {
 /// verify no signatures, so BLS-disabled vectors run identically, matching the
 /// upstream adapter, which has no BLS gate here.
 pub(crate) fn run(req: &CaseRequest) -> Verdict {
-    // Dispatch precedes any filesystem I/O, so an unrecognised handler stays a
-    // todo instead of turning a missing pre file into a bug.
+    // Dispatch precedes any filesystem I/O: an unrecognised handler resolves to
+    // a todo and its (possibly missing) pre file is never opened.
     let Some(phase) = dispatch_for(&req.handler) else {
         return Verdict::fail(
             "todo",
@@ -126,9 +126,9 @@ mod tests {
 
     #[test]
     fn bls_setting_is_ignored() {
-        // epoch sub-phases verify no signatures, so bls_setting=2 is no longer a
-        // todo: it runs like any other case (here, missing pre → bug), matching
-        // the upstream adapter's lack of a BLS gate.
+        // epoch sub-phases verify no signatures, so a bls_setting=2 case runs
+        // like any other (here, missing pre → bug), same as bls_setting=1 and
+        // matching the upstream adapter's lack of a BLS gate.
         assert!(run(&req_stub("slashings", 2)).line().starts_with("fail\tbug\t"));
     }
 
