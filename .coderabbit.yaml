@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=https://www.coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit review configuration for moonglass-runner.
+#
+# Policy: CodeRabbit is a best-effort second opinion. The real review gate is
+# `/code-review`, the strict cargo lint set (deny clippy all+pedantic, missing
+# docs incl. private items, no unsafe), the test suite, and Ivan's own review.
+# A green, neutral, or empty CodeRabbit check is NOT an approval.
+
+language: en-US
+early_access: false
+
+reviews:
+  # assertive = more thorough. CodeRabbit only runs best-effort here, so
+  # maximize signal when it does run; low-value nits still cost less than a
+  # missed real finding.
+  profile: assertive
+
+  # Best-effort reviewer: never let it block a merge via "request changes".
+  request_changes_workflow: false
+
+  high_level_summary: true
+  review_status: true
+  poem: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    base_branches:
+      - main
+
+  # Exclusions only; everything else is reviewed. The lock file is pinned
+  # dependency noise, not hand-reviewable.
+  path_filters:
+    - "!Cargo.lock"
+
+  path_instructions:
+    - path: "src/**"
+      instructions: >-
+        This crate serves the pyspec conformance wire protocol over stdio; the
+        normative contract is consensus-diff `docs/protocol.md` (sibling repo).
+        Verdict buckets are semantic and load-bearing: `bug` is reserved for
+        harness-contract violations only (malformed lines of implemented
+        runners, file I/O errors, pre-state decode failures, panics), `todo`
+        means a coverage gap we intend to close, `skip` means deliberately
+        unmodeled upstream (genesis/fork/transition). Flag anything that blurs
+        those distinctions or drifts from the protocol doc. The dispatch path
+        is deliberately panic-free (catch_unwind in main is a backstop, not a
+        license); do not suggest expect/unwrap there. Do not flag what the
+        deny-lint set already enforces (clippy all+pedantic, missing docs,
+        dead_code, unsafe) or `#[allow(dead_code)]` fields carrying a
+        TODO(ivan-epf-research#41) note. Tests pin exact wire lines by design,
+        including a trailing space for an empty verb; do not report those
+        assertions as bugs. Ports from moonglass/tests/src/adapters/* are
+        attributed in-code and keep the adapter's moonglass-core calls; flag a
+        port that silently diverges from its cited source.
+    - path: "README.md"
+      instructions: >-
+        The runner-status table must match the dispatch in src/main.rs and the
+        verdict vocabulary the code actually emits. Flag drift between this
+        table and the code, and any claim that overstates implemented coverage.
+    - path: "Cargo.toml"
+      instructions: >-
+        The dependency surface is deliberately one crate (moonglass-core,
+        rev-pinned) and the lint policy is deliberately maximal; do not suggest
+        adding dependencies or relaxing lints. The two [[bin]] targets with
+        required-features implement the exactly-one-preset contract; flag any
+        change that would let both preset features coexist in one build.
+
+chat:
+  auto_reply: true
