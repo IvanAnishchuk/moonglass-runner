@@ -40,7 +40,7 @@ enum Dispatch {
 /// `moonglass/tests/src/adapters/operations.rs` (AGPL-3.0-only; same license
 /// as this crate). Container types and `BeaconState` method names match the
 /// adapter's statics (lines 197–261 of that file).
-/// Returns `None` for an unknown handler — never touches the filesystem.
+/// Returns `None` for an unknown handler; never touches the filesystem.
 fn dispatch_for(handler: &str) -> Option<Dispatch> {
     Some(match handler {
         "attestation" => Dispatch::Input(|s, b| {

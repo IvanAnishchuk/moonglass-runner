@@ -1,8 +1,26 @@
 //! Shared verdict classification for the runner family. `classify` is the pure
 //! `EthCL` verdict table (a faithful rejection of an invalid vector is a pass);
-//! it is called by every runner that produces a canonical post-state.
+//! `byte_diff_detail` formats the mismatch detail both it and the `ssz_static`
+//! round-trip check report.
 
 use crate::protocol::Verdict;
+
+/// Human detail for a byte-string mismatch: both lengths and the first
+/// differing index. `first diff at byte K` is the earliest position where `got`
+/// and `want` disagree over their common prefix, or the shorter length when one
+/// is a prefix of the other. `prefix` names the comparison (e.g. `post differs`).
+pub(crate) fn byte_diff_detail(prefix: &str, got: &[u8], want: &[u8]) -> String {
+    let first_diff = got
+        .iter()
+        .zip(want.iter())
+        .position(|(a, b)| a != b)
+        .unwrap_or_else(|| got.len().min(want.len()));
+    format!(
+        "{prefix}: got {} B, want {} B, first diff at byte {first_diff}",
+        got.len(),
+        want.len(),
+    )
+}
 
 /// Pure verdict table. `result` is the transition outcome (error stringified),
 /// `got_post` the canonical SSZ of the resulting state, `expected_post` the
@@ -15,26 +33,7 @@ pub(crate) fn classify(
     match (result, expected_post) {
         (Ok(()), Some(exp)) if got_post == exp => Verdict::pass("ok", ""),
         (Ok(()), Some(exp)) => {
-            let detail = if got_post.len() == exp.len() {
-                let offset = got_post
-                    .iter()
-                    .zip(exp.iter())
-                    .position(|(a, b)| a != b)
-                    .unwrap_or(0);
-                format!(
-                    "post differs: got {} B, want {} B, first diff at byte {}",
-                    got_post.len(),
-                    exp.len(),
-                    offset
-                )
-            } else {
-                format!(
-                    "post differs: got {} B, want {} B",
-                    got_post.len(),
-                    exp.len()
-                )
-            };
-            Verdict::fail("mismatch", detail)
+            Verdict::fail("mismatch", byte_diff_detail("post differs", got_post, exp))
         }
         (Err(e), Some(_)) => Verdict::fail("reject-valid", e),
         (Err(e), None) => Verdict::pass("reject", e),
@@ -45,6 +44,31 @@ pub(crate) fn classify(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- byte_diff_detail ---
+
+    #[test]
+    fn equal_length_diff_reports_the_first_byte() {
+        let d = byte_diff_detail("post differs", b"abc", b"abd");
+        assert_eq!(d, "post differs: got 3 B, want 3 B, first diff at byte 2");
+    }
+
+    #[test]
+    fn unequal_length_diff_still_reports_a_first_byte() {
+        let d = byte_diff_detail("post differs", b"short", b"longer_expected");
+        // 's' vs 'l' disagree at index 0.
+        assert_eq!(d, "post differs: got 5 B, want 15 B, first diff at byte 0");
+    }
+
+    #[test]
+    fn pure_prefix_reports_the_shorter_length_as_the_diff() {
+        // No disagreement over the common prefix, so the diff is at the point
+        // where the shorter run ends.
+        let d = byte_diff_detail("round-trip differs", b"abc", b"abcde");
+        assert_eq!(d, "round-trip differs: got 3 B, want 5 B, first diff at byte 3");
+    }
+
+    // --- classify ---
 
     #[test]
     fn valid_vector_with_matching_post_passes() {
@@ -67,7 +91,8 @@ mod tests {
         assert!(line.starts_with("fail\tmismatch\t"));
         assert!(line.contains("got 5 B"));
         assert!(line.contains("want 15 B"));
-        assert!(!line.contains("first diff at byte"));
+        // A length mismatch now carries the first-diff byte too.
+        assert!(line.contains("first diff at byte 0"));
     }
 
     #[test]

@@ -3,6 +3,18 @@
 
 use std::path::PathBuf;
 
+/// Split one wire line into exactly `want` tab fields after trimming a trailing
+/// CRLF. Errs with the observed count on any other width, the framing check both
+/// request parsers share.
+pub(crate) fn split_fields(line: &str, want: usize) -> Result<Vec<&str>, String> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    let f: Vec<&str> = line.split('\t').collect();
+    if f.len() != want {
+        return Err(format!("expected {want} fields, got {}", f.len()));
+    }
+    Ok(f)
+}
+
 /// A single `pyspec_server` request decoded from one tab-delimited stdin line.
 pub(crate) struct CaseRequest {
     /// Test runner name (e.g. `operations`).
@@ -43,11 +55,7 @@ pub(crate) struct CaseRequest {
 impl CaseRequest {
     /// Parse one tab-delimited `pyspec_server` request line into a [`CaseRequest`].
     pub(crate) fn parse(line: &str) -> Result<Self, String> {
-        let line = line.trim_end_matches(['\r', '\n']);
-        let f: Vec<&str> = line.split('\t').collect();
-        if f.len() != 10 {
-            return Err(format!("expected 10 fields, got {}", f.len()));
-        }
+        let f = split_fields(line, 10)?;
         let opt_path = |s: &str| (s != "-").then(|| PathBuf::from(s));
         let opt_u64 = |s: &str| -> Result<Option<u64>, String> {
             if s == "-" {
@@ -88,11 +96,7 @@ pub(crate) struct SszStaticRequest {
 impl SszStaticRequest {
     /// Parse one 4-field `ssz_static` line.
     pub(crate) fn parse(line: &str) -> Result<Self, String> {
-        let line = line.trim_end_matches(['\r', '\n']);
-        let f: Vec<&str> = line.split('\t').collect();
-        if f.len() != 4 {
-            return Err(format!("expected 4 fields, got {}", f.len()));
-        }
+        let f = split_fields(line, 4)?;
         Ok(Self {
             handler: f[1].to_string(),
             serialized: PathBuf::from(f[2]),
@@ -226,5 +230,20 @@ mod tests {
     fn ssz_static_request_rejects_wrong_field_count() {
         assert!(SszStaticRequest::parse("ssz_static\tCheckpoint\t/t/s.ssz").is_err());
         assert!(SszStaticRequest::parse("ssz_static\tA\t/t/s.ssz\t0x1\textra").is_err());
+    }
+
+    #[test]
+    fn split_fields_returns_all_fields_on_exact_count() {
+        assert_eq!(split_fields("a\tb\tc", 3).unwrap(), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn split_fields_trims_trailing_crlf() {
+        assert_eq!(split_fields("a\tb\r\n", 2).unwrap(), ["a", "b"]);
+    }
+
+    #[test]
+    fn split_fields_reports_the_observed_count() {
+        assert_eq!(split_fields("a\tb", 4).unwrap_err(), "expected 4 fields, got 2");
     }
 }
