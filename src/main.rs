@@ -28,7 +28,7 @@ compile_error!(
 /// Preset compiled into this binary (`minimal` or `mainnet`).
 const COMPILED_PRESET: &str = if cfg!(feature = "minimal") { "minimal" } else { "mainnet" };
 
-/// This bin target's name — one target per preset, see `[[bin]]` in Cargo.toml.
+/// This bin target's name, one target per preset, see `[[bin]]` in Cargo.toml.
 const BIN_NAME: &str = env!("CARGO_BIN_NAME");
 
 /// Dispatch one request line on its first field, then parse, then run.
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn ssz_static_malformed_line_is_a_bug() {
-        // ssz_static now dispatches (no longer todo); a wrong-field-count line is
+        // ssz_static now dispatches directly; a wrong-field-count line is
         // a harness-contract violation, the same as any implemented runner.
         assert_eq!(
             respond("ssz_static\tCheckpoint").line(),

@@ -1,9 +1,7 @@
 //! `ssz_static` runner: decode the container, round-trip the bytes, compare
 //! the hash-tree-root. Ported from `moonglass/tests/src/adapters/ssz_static.rs`
-//! (AGPL-3.0-only; same license as this crate) with the vector loading dropped
-//! — the wire delivers decompressed bytes and the expected root directly.
-
-use std::fmt::Write as _;
+//! (AGPL-3.0-only; same license as this crate) with the vector loading dropped.
+//! The wire delivers decompressed bytes and the expected root directly.
 
 use crate::protocol::{SszStaticRequest, Verdict};
 use moonglass_core::containers::{
@@ -26,11 +24,14 @@ use moonglass_core::containers::{
 use moonglass_core::primitives::Root;
 use moonglass_core::ssz::{Deserialize, Merkleized, Serialize};
 
-/// Lowercase hex of a byte slice, no `0x` prefix.
+/// Lowercase hex of a byte slice, no `0x` prefix. Expect-free: it is called on
+/// failure-detail paths, and each nibble indexes a fixed 16-entry table.
 fn hex_string(bytes: &[u8]) -> String {
+    const HEX: [u8; 16] = *b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        write!(s, "{b:02x}").expect("writing to a String is infallible");
+    for &b in bytes {
+        s.push(char::from(HEX[usize::from(b >> 4)]));
+        s.push(char::from(HEX[usize::from(b & 0x0f)]));
     }
     s
 }
@@ -43,6 +44,9 @@ fn decode_root(hex: &str) -> Result<[u8; 32], String> {
     if bytes.len() != 64 {
         return Err(format!("expected 64 hex chars, got {}", bytes.len()));
     }
+    if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("expected hex digits (0-9a-fA-F) only".to_string());
+    }
     let mut out = [0u8; 32];
     for (byte, pair) in out.iter_mut().zip(bytes.chunks_exact(2)) {
         let s = std::str::from_utf8(pair).map_err(|_| "non-ascii hex".to_string())?;
@@ -51,20 +55,27 @@ fn decode_root(hex: &str) -> Result<[u8; 32], String> {
     Ok(out)
 }
 
-/// Generic per-container check: decode → re-serialize (byte equality) → root,
-/// mirroring the adapter's `run_one`. A container that decodes but does not
-/// round-trip or match the root is a `mismatch`, never a `bug`.
+/// Generic per-container check: decode, re-serialize for byte equality, then
+/// compare the hash-tree-root. Mirrors the adapter's `run_one`.
+///
+/// Every `ssz_static` vector is a valid container carrying an expected root, so
+/// a failure to decode, re-serialize, or merkleize is the backend rejecting a
+/// valid vector (`reject-valid`, matching `operations::classify` and protocol
+/// §5's canonical vocabulary). A serialization or root the backend produces
+/// that differs from the vector is a `mismatch`. The detail strings (`decode:`,
+/// `re-serialize:`, `hash_tree_root:`, `round-trip differs:`, `root:`) keep the
+/// cases distinguishable for a human.
 fn run_one<T>(bytes: &[u8], expected_root: &[u8; 32]) -> Verdict
 where
     T: Deserialize + Serialize + Merkleized,
 {
     let value = match T::deserialize(bytes) {
         Ok(v) => v,
-        Err(e) => return Verdict::fail("mismatch", format!("decode: {e:?}")),
+        Err(e) => return Verdict::fail("reject-valid", format!("decode: {e:?}")),
     };
     let mut reencoded = Vec::with_capacity(bytes.len());
     if let Err(e) = value.serialize(&mut reencoded) {
-        return Verdict::fail("mismatch", format!("re-serialize: {e:?}"));
+        return Verdict::fail("reject-valid", format!("re-serialize: {e:?}"));
     }
     if reencoded != bytes {
         let first_diff = reencoded
@@ -83,7 +94,7 @@ where
     }
     let node = match value.hash_tree_root() {
         Ok(n) => n,
-        Err(e) => return Verdict::fail("mismatch", format!("hash_tree_root: {e:?}")),
+        Err(e) => return Verdict::fail("reject-valid", format!("hash_tree_root: {e:?}")),
     };
     let got = Root::from(node).0;
     if got == *expected_root {
@@ -101,7 +112,7 @@ where
 /// Produces `dispatch_for`, a pure name → typed-[`run_one`] lookup (as a plain
 /// function pointer, so the concrete container type is monomorphized here).
 /// It never touches the filesystem, so [`run`] can answer `todo` for an unknown
-/// container before any I/O — the same "dispatch precedes I/O" idiom as
+/// container before any I/O, the same "dispatch precedes I/O" idiom as
 /// `operations.rs`.
 ///
 /// The 65 names below must stay in lockstep with the adapter's
@@ -214,10 +225,15 @@ pub(crate) fn run(req: &SszStaticRequest) -> Verdict {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
     use super::*;
 
+    /// Per-call counter making each test temp-dir name unique within one process.
+    static TEMP_DIR_SEQ: AtomicU32 = AtomicU32::new(0);
+
     /// Serialize a default `Checkpoint` and its expected root, exactly the way
-    /// [`run`] computes them — in memory, no filesystem.
+    /// [`run`] computes them, in memory, no filesystem.
     fn checkpoint_bytes_and_root() -> (Vec<u8>, [u8; 32]) {
         let cp = Checkpoint::default();
         let mut bytes = Vec::new();
@@ -240,21 +256,24 @@ mod tests {
     }
 
     #[test]
-    fn undecodable_bytes_are_a_mismatch_not_a_bug() {
+    fn undecodable_bytes_are_reject_valid() {
         let line = run_one::<Checkpoint>(&[0xffu8; 3], &[0x00; 32]).line();
-        assert!(line.starts_with("fail\tmismatch\tdecode:"), "{line}");
+        assert!(line.starts_with("fail\treject-valid\tdecode:"), "{line}");
     }
 
     #[test]
     fn decode_root_accepts_optional_prefix_and_rejects_malformed() {
         // A valid 0x-prefixed 64-char root decodes to the right bytes.
         assert_eq!(decode_root(&format!("0x{}", "ab".repeat(32))).unwrap(), [0xab; 32]);
-        // A bare (no 0x) 64-char root is accepted — the prefix is optional.
+        // A bare (no 0x) 64-char root is accepted; the prefix is optional.
         assert_eq!(decode_root(&"cd".repeat(32)).unwrap(), [0xcd; 32]);
         // Wrong length is an error.
         assert!(decode_root("0x00").is_err());
         // 64 chars but non-hex (a stray 'g') is an error.
         assert!(decode_root(&format!("0x{}g", "0".repeat(63))).is_err());
+        // A leading '+' is not a hex digit; from_str_radix would accept it, the
+        // guard rejects it. 64 chars, one '+', must be an error.
+        assert!(decode_root(&format!("+{}", "a".repeat(63))).is_err());
     }
 
     #[test]
@@ -262,7 +281,8 @@ mod tests {
         // The one hermetic file-backed test: exercise the read → decode_root →
         // dispatch glue in `run`, then clean up the unique temp dir.
         let (bytes, root) = checkpoint_bytes_and_root();
-        let dir = std::env::temp_dir().join(format!("mgr-ssz-run-{}", std::process::id()));
+        let seq = TEMP_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("mgr-ssz-run-{}-{seq}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("serialized.ssz");
         std::fs::write(&path, &bytes).unwrap();
