@@ -30,14 +30,31 @@ const COMPILED_PRESET: &str = if cfg!(feature = "minimal") { "minimal" } else { 
 /// This bin target's name — one target per preset, see `[[bin]]` in Cargo.toml.
 const BIN_NAME: &str = env!("CARGO_BIN_NAME");
 
-/// Parse one request line, dispatch to the matching runner, return a verdict.
+/// Dispatch one request line on its first field, then parse, then run.
+///
+/// Order of arms is semantic: implemented runners parse strictly (malformed
+/// line = `bug`); runners moonglass-core cannot serve by upstream design (no
+/// genesis-builder, no `upgrade_to_*` API) answer `skip`; protocol runners not
+/// yet implemented answer `todo`; anything else is an unknown verb
+/// (consensus-diff `docs/protocol.md` §7).
 fn respond(line: &str) -> Verdict {
-    match CaseRequest::parse(line) {
-        Ok(req) => match req.runner.as_str() {
-            "operations" => operations::run(&req),
-            other => Verdict::fail("todo", format!("unsupported runner {other}")),
+    let first = line
+        .trim_end_matches(['\r', '\n'])
+        .split('\t')
+        .next()
+        .unwrap_or_default();
+    match first {
+        "operations" => match CaseRequest::parse(line) {
+            Ok(req) => operations::run(&req),
+            Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
         },
-        Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
+        "fork" | "genesis" | "transition" => Verdict::fail(
+            "skip",
+            format!("unmodeled upstream: {first} has no moonglass-core API"),
+        ),
+        "epoch_processing" | "finality" | "fork_choice" | "random" | "rewards" | "sanity"
+        | "ssz_static" => Verdict::fail("todo", format!("unsupported runner {first}")),
+        _ => Verdict::fail("todo", format!("unsupported verb {first}")),
     }
 }
 
@@ -73,5 +90,77 @@ fn main() {
         if writeln!(stdout, "{}", verdict.line()).is_err() || stdout.flush().is_err() {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fork_choice_shape_degrades_to_todo() {
+        let line = "fork_choice\tget_head\t/t/anchor_state.ssz\t-\t1\t0\t-\t/t/anchor_block.ssz,/t/fc.txt";
+        assert_eq!(respond(line).line(), "fail\ttodo\tunsupported runner fork_choice");
+    }
+
+    #[test]
+    fn ssz_static_shape_degrades_to_todo() {
+        let line = "ssz_static\tAttestation\t/t/serialized.ssz\t0xabcd";
+        assert_eq!(respond(line).line(), "fail\ttodo\tunsupported runner ssz_static");
+    }
+
+    #[test]
+    fn known_ten_field_runner_answers_todo() {
+        let line = "sanity\tblocks\t/t/pre.ssz\t/t/post.ssz\t1\t2\t-\t/t/blocks_0.ssz,/t/blocks_1.ssz\t-\t1";
+        assert_eq!(respond(line).line(), "fail\ttodo\tunsupported runner sanity");
+    }
+
+    #[test]
+    fn known_runner_degrades_before_shape_parsing() {
+        // A truncated line for an unimplemented runner is a coverage gap,
+        // not a contract violation: no field-count check happens first.
+        assert_eq!(respond("sanity\tblocks").line(), "fail\ttodo\tunsupported runner sanity");
+    }
+
+    #[test]
+    fn unknown_first_field_is_an_unsupported_verb() {
+        // Reserved verbs (compute, generate) and anything else unknown.
+        let line = "compute\toperations\tattestation\t/t/pre.ssz";
+        assert_eq!(respond(line).line(), "fail\ttodo\tunsupported verb compute");
+    }
+
+    #[test]
+    fn malformed_line_for_an_implemented_runner_is_still_a_bug() {
+        assert_eq!(
+            respond("operations\tattestation").line(),
+            "fail\tbug\tbad request line: expected 10 fields, got 2"
+        );
+    }
+
+    #[test]
+    fn unmodeled_runners_answer_skip() {
+        // moonglass-core deliberately has no genesis-builder or upgrade_to_* API;
+        // these are skip (deliberately unmodeled), not todo (coverage debt).
+        for runner in ["genesis", "fork", "transition"] {
+            let line = format!("{runner}\tsome_handler\t/t/pre.ssz\t-\t1\t0\t-\t\t-\t1");
+            assert_eq!(
+                respond(&line).line(),
+                format!("fail\tskip\tunmodeled upstream: {runner} has no moonglass-core API")
+            );
+        }
+    }
+
+    #[test]
+    fn tab_leading_line_is_an_empty_unsupported_verb() {
+        // A line whose first field is empty degrades like any unknown verb.
+        assert_eq!(respond("\tx").line(), "fail\ttodo\tunsupported verb ");
+    }
+
+    #[test]
+    fn bare_runner_name_with_trailing_newline_still_dispatches() {
+        assert_eq!(
+            respond("genesis\n").line(),
+            "fail\tskip\tunmodeled upstream: genesis has no moonglass-core API"
+        );
     }
 }

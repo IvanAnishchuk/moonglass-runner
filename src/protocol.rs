@@ -6,6 +6,11 @@ use std::path::PathBuf;
 /// A single `pyspec_server` request decoded from one tab-delimited stdin line.
 pub(crate) struct CaseRequest {
     /// Test runner name (e.g. `operations`).
+    // Dispatch happens on the raw first field before parsing (see main.rs
+    // `respond`), so nothing reads the decoded copy until the non-operations
+    // 10-field runners are implemented.
+    // TODO(ivan-epf-research#41): consumed by the non-operations runners.
+    #[allow(dead_code)]
     pub(crate) runner: String,
     /// Handler within the runner (e.g. `attestation`).
     pub(crate) handler: String,
@@ -16,21 +21,21 @@ pub(crate) struct CaseRequest {
     /// BLS setting flag from the wire protocol (0 = BLS on, 2 = BLS off).
     pub(crate) bls_setting: u8,
     /// Number of blocks in the test vector (M1 runners; unused by operations).
-    // TODO(M1, ivan-epf-research#37): consumed by the non-operations runners.
+    // TODO(ivan-epf-research#41): consumed by the non-operations runners.
     #[allow(dead_code)]
     pub(crate) blocks_count: usize,
     /// Fork epoch override; `None` when absent.
-    // TODO(M1, ivan-epf-research#37): consumed by the non-operations runners.
+    // TODO(ivan-epf-research#41): consumed by the non-operations runners.
     #[allow(dead_code)]
     pub(crate) fork_epoch: Option<u64>,
     /// Ordered list of additional input files (one operation per entry for operations tests).
     pub(crate) inputs: Vec<PathBuf>,
     /// Fork block override; `None` when absent.
-    // TODO(M1, ivan-epf-research#37): consumed by the non-operations runners.
+    // TODO(ivan-epf-research#41): consumed by the non-operations runners.
     #[allow(dead_code)]
     pub(crate) fork_block: Option<u64>,
     /// Whether the execution payload is expected to be valid (M1 runners).
-    // TODO(M1, ivan-epf-research#37): consumed by the non-operations runners.
+    // TODO(ivan-epf-research#41): consumed by the non-operations runners.
     #[allow(dead_code)]
     pub(crate) execution_valid: bool,
 }
