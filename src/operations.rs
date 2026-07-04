@@ -167,6 +167,31 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// The 17 wire handler names `operations` dispatches, one per adapter static
+    /// (`voluntary_exit_churn` shares `process_voluntary_exit`). Kept in lockstep
+    /// with `dispatch_for` so a dropped arm fails the completeness test below.
+    /// `builder_deposit_request`/`builder_exit_request` are served but have no
+    /// gloas fixtures at the vendored vectors version yet.
+    const HANDLERS_FOR_TEST: &[&str] = &[
+        "attestation",
+        "attester_slashing",
+        "proposer_slashing",
+        "voluntary_exit",
+        "voluntary_exit_churn",
+        "bls_to_execution_change",
+        "sync_aggregate",
+        "block_header",
+        "payload_attestation",
+        "deposit_request",
+        "builder_deposit_request",
+        "builder_exit_request",
+        "withdrawal_request",
+        "consolidation_request",
+        "execution_payload_bid",
+        "parent_execution_payload",
+        "withdrawals",
+    ];
+
     fn req_stub(handler: &str, bls_setting: u8) -> CaseRequest {
         CaseRequest {
             runner: "operations".to_string(),
@@ -207,5 +232,12 @@ mod tests {
         let line = run(&req).line();
         assert!(line.starts_with("fail\ttodo\t"));
         assert!(line.contains("no_such_handler"));
+    }
+
+    #[test]
+    fn every_documented_handler_dispatches() {
+        for h in HANDLERS_FOR_TEST {
+            assert!(dispatch_for(h).is_some(), "{h} missing from the table");
+        }
     }
 }

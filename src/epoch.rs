@@ -44,7 +44,7 @@ fn dispatch_for(handler: &str) -> Option<EpochPhase> {
 /// against the expected post. An unknown handler is todo before any I/O. Ported
 /// from `run_epoch_case` in the cited adapter, dropping the reftest-only
 /// full-epoch sidecar check. `bls_setting` is not consulted: epoch sub-phases
-/// verify no signatures, so BLS-disabled vectors run identically — matching the
+/// verify no signatures, so BLS-disabled vectors run identically, matching the
 /// upstream adapter, which has no BLS gate here.
 pub(crate) fn run(req: &CaseRequest) -> Verdict {
     // Dispatch precedes any filesystem I/O, so an unrecognised handler stays a

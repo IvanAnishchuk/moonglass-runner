@@ -47,6 +47,10 @@ fn respond(line: &str) -> Verdict {
         .split('\t')
         .next()
         .unwrap_or_default();
+    // TODO: the operations/epoch_processing arms are near-identical: parse a
+    // CaseRequest, run, map a parse error to a bug. Each 10-field runner still
+    // to land (finality/random/rewards/sanity) adds another copy; collapse the
+    // family to a name->run-fn table once there are enough to justify it.
     match first {
         "operations" => match CaseRequest::parse(line) {
             Ok(req) => operations::run(&req),

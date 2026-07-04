@@ -34,7 +34,7 @@ pub(crate) fn decode_pre(
 /// Serialize the post-state on the success path, read the expected-post file,
 /// and classify. `result` is the transition outcome (error stringified); an
 /// errored state is never serialized (it may be partial, and `classify` ignores
-/// the post bytes on the Err path). `cap` sizes the post-state buffer up front —
+/// the post bytes on the Err path). `cap` sizes the post-state buffer up front;
 /// pass the pre-state byte length, since a post-state is roughly its size.
 pub(crate) fn finish(
     result: Result<(), String>,
