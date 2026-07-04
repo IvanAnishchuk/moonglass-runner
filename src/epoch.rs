@@ -5,10 +5,9 @@
 //! check is dropped, since those files never travel on the wire.
 
 use crate::protocol::{CaseRequest, Verdict};
-use crate::verdict::classify;
+use crate::runner::{decode_pre, finish};
 use moonglass_core::containers::BeaconState;
 use moonglass_core::error::TransitionError;
-use moonglass_core::ssz::{Deserialize, Serialize};
 
 /// A single epoch sub-phase: mutate the beacon state in place, or return the
 /// transition error the spec expects for an invalid vector.
@@ -41,17 +40,13 @@ fn dispatch_for(handler: &str) -> Option<EpochPhase> {
     })
 }
 
-/// Run one `epoch_processing` case: read pre, run the sub-phase, classify
-/// against the expected post. `bls_setting` == 2 is todo (no verify-off path);
-/// an unknown handler is todo before any I/O. Ported from `run_epoch_case` in
-/// the cited adapter, dropping the reftest-only full-epoch sidecar check.
+/// Run one `epoch_processing` case: decode pre, run the sub-phase, classify
+/// against the expected post. An unknown handler is todo before any I/O. Ported
+/// from `run_epoch_case` in the cited adapter, dropping the reftest-only
+/// full-epoch sidecar check. `bls_setting` is not consulted: epoch sub-phases
+/// verify no signatures, so BLS-disabled vectors run identically — matching the
+/// upstream adapter, which has no BLS gate here.
 pub(crate) fn run(req: &CaseRequest) -> Verdict {
-    // `bls_setting` == 2 (BLS-disabled) has no verify-off path in moonglass-core,
-    // so those cases land in the todo bucket.
-    if req.bls_setting == 2 {
-        return Verdict::fail("todo", "bls_setting=2 unsupported");
-    }
-
     // Dispatch precedes any filesystem I/O, so an unrecognised handler stays a
     // todo instead of turning a missing pre file into a bug.
     let Some(phase) = dispatch_for(&req.handler) else {
@@ -61,38 +56,14 @@ pub(crate) fn run(req: &CaseRequest) -> Verdict {
         );
     };
 
-    let Some(pre_path) = &req.pre else {
-        return Verdict::fail("bug", "epoch_processing case without a pre state");
-    };
-    let pre_bytes = match std::fs::read(pre_path) {
-        Ok(b) => b,
-        Err(e) => return Verdict::fail("bug", format!("read pre: {e}")),
-    };
-    let mut state = match BeaconState::deserialize(&pre_bytes) {
-        Ok(s) => s,
-        Err(e) => return Verdict::fail("bug", format!("decode pre: {e:?}")),
+    let (pre_bytes, mut state) = match decode_pre(req, "epoch_processing") {
+        Ok(pair) => pair,
+        Err(v) => return v,
     };
 
     let result: Result<(), String> = phase(&mut state).map_err(|e| e.to_string());
 
-    // Serialize the post state only on the success path; an errored state may be
-    // partial, and classify ignores got_post when result is Err.
-    let mut got_post = Vec::new();
-    if result.is_ok()
-        && let Err(e) = state.serialize(&mut got_post)
-    {
-        return Verdict::fail("bug", format!("serialize post: {e}"));
-    }
-
-    let expected_post = match &req.post {
-        Some(p) => match std::fs::read(p) {
-            Ok(b) => Some(b),
-            Err(e) => return Verdict::fail("bug", format!("read post: {e}")),
-        },
-        None => None,
-    };
-
-    classify(result, &got_post, expected_post.as_deref())
+    finish(result, &state, pre_bytes.len(), req)
 }
 
 #[cfg(test)]
@@ -154,8 +125,11 @@ mod tests {
     }
 
     #[test]
-    fn bls_disabled_is_todo() {
-        assert!(run(&req_stub("slashings", 2)).line().starts_with("fail\ttodo\t"));
+    fn bls_setting_is_ignored() {
+        // epoch sub-phases verify no signatures, so bls_setting=2 is no longer a
+        // todo: it runs like any other case (here, missing pre → bug), matching
+        // the upstream adapter's lack of a BLS gate.
+        assert!(run(&req_stub("slashings", 2)).line().starts_with("fail\tbug\t"));
     }
 
     #[test]

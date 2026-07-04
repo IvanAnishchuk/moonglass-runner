@@ -6,6 +6,7 @@
 mod epoch;
 mod operations;
 mod protocol;
+mod runner;
 mod ssz_static;
 mod verdict;
 

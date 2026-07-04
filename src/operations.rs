@@ -3,7 +3,7 @@
 //! verdict model: a faithful rejection of an invalid vector is a pass).
 
 use crate::protocol::{CaseRequest, Verdict};
-use crate::verdict::classify;
+use crate::runner::{decode_pre, finish};
 use moonglass_core::containers::{
     Attestation, AttesterSlashing, BeaconBlock, BeaconState, BuilderDepositRequest,
     BuilderExitRequest, ConsolidationRequest, DepositRequest, PayloadAttestation, ProposerSlashing,
@@ -11,7 +11,7 @@ use moonglass_core::containers::{
     WithdrawalRequest,
 };
 use moonglass_core::error::TransitionError;
-use moonglass_core::ssz::{Deserialize, Serialize};
+use moonglass_core::ssz::Deserialize;
 
 /// Decode a single SSZ operation of type `T` from `op_bytes` then call
 /// `apply(state, &op)`, converting both error kinds to `String`.
@@ -140,16 +140,9 @@ pub(crate) fn run(req: &CaseRequest) -> Verdict {
         );
     };
 
-    let Some(pre_path) = &req.pre else {
-        return Verdict::fail("bug", "operations case without a pre state");
-    };
-    let pre_bytes = match std::fs::read(pre_path) {
-        Ok(b) => b,
-        Err(e) => return Verdict::fail("bug", format!("read pre: {e}")),
-    };
-    let mut state = match BeaconState::deserialize(&pre_bytes) {
-        Ok(s) => s,
-        Err(e) => return Verdict::fail("bug", format!("decode pre: {e:?}")),
+    let (pre_bytes, mut state) = match decode_pre(req, "operations") {
+        Ok(pair) => pair,
+        Err(v) => return v,
     };
 
     // Read the operation bytes only for input-based handlers; state-only
@@ -166,25 +159,7 @@ pub(crate) fn run(req: &CaseRequest) -> Verdict {
         Dispatch::StateOnly(f) => f(&mut state),
     };
 
-    // Only serialize the post state on the success path; an errored state may
-    // be in a partial/inconsistent state and got_post is unused by classify
-    // when result is Err.
-    let mut got_post = Vec::new();
-    if result.is_ok()
-        && let Err(e) = state.serialize(&mut got_post)
-    {
-        return Verdict::fail("bug", format!("serialize post: {e}"));
-    }
-
-    let expected_post = match &req.post {
-        Some(p) => match std::fs::read(p) {
-            Ok(b) => Some(b),
-            Err(e) => return Verdict::fail("bug", format!("read post: {e}")),
-        },
-        None => None,
-    };
-
-    classify(result, &got_post, expected_post.as_deref())
+    finish(result, &state, pre_bytes.len(), req)
 }
 
 #[cfg(test)]
