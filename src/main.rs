@@ -5,8 +5,9 @@
 
 mod operations;
 mod protocol;
+mod ssz_static;
 
-use protocol::{CaseRequest, Verdict};
+use protocol::{CaseRequest, SszStaticRequest, Verdict};
 use std::io::{BufRead, Write};
 
 // The exactly-one-preset contract, stated at this crate's boundary. In practice
@@ -27,7 +28,7 @@ compile_error!(
 /// Preset compiled into this binary (`minimal` or `mainnet`).
 const COMPILED_PRESET: &str = if cfg!(feature = "minimal") { "minimal" } else { "mainnet" };
 
-/// This bin target's name — one target per preset, see `[[bin]]` in Cargo.toml.
+/// This bin target's name, one target per preset, see `[[bin]]` in Cargo.toml.
 const BIN_NAME: &str = env!("CARGO_BIN_NAME");
 
 /// Dispatch one request line on its first field, then parse, then run.
@@ -48,12 +49,17 @@ fn respond(line: &str) -> Verdict {
             Ok(req) => operations::run(&req),
             Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
         },
+        "ssz_static" => match SszStaticRequest::parse(line) {
+            Ok(req) => ssz_static::run(&req),
+            Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
+        },
         "fork" | "genesis" | "transition" => Verdict::fail(
             "skip",
             format!("unmodeled upstream: {first} has no moonglass-core API"),
         ),
-        "epoch_processing" | "finality" | "fork_choice" | "random" | "rewards" | "sanity"
-        | "ssz_static" => Verdict::fail("todo", format!("unsupported runner {first}")),
+        "epoch_processing" | "finality" | "fork_choice" | "random" | "rewards" | "sanity" => {
+            Verdict::fail("todo", format!("unsupported runner {first}"))
+        }
         _ => Verdict::fail("todo", format!("unsupported verb {first}")),
     }
 }
@@ -104,9 +110,13 @@ mod tests {
     }
 
     #[test]
-    fn ssz_static_shape_degrades_to_todo() {
-        let line = "ssz_static\tAttestation\t/t/serialized.ssz\t0xabcd";
-        assert_eq!(respond(line).line(), "fail\ttodo\tunsupported runner ssz_static");
+    fn ssz_static_malformed_line_is_a_bug() {
+        // ssz_static now dispatches directly; a wrong-field-count line is
+        // a harness-contract violation, the same as any implemented runner.
+        assert_eq!(
+            respond("ssz_static\tCheckpoint").line(),
+            "fail\tbug\tbad request line: expected 4 fields, got 2"
+        );
     }
 
     #[test]

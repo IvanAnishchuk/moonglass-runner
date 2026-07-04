@@ -75,6 +75,32 @@ impl CaseRequest {
     }
 }
 
+/// The 4-field `ssz_static` request: container name, serialized bytes, expected root.
+pub(crate) struct SszStaticRequest {
+    /// Container type name (e.g. `BeaconBlock`).
+    pub(crate) handler: String,
+    /// Path to the decompressed serialized bytes.
+    pub(crate) serialized: PathBuf,
+    /// Expected hash-tree-root, hex as it travels on the wire (usually 0x-prefixed).
+    pub(crate) root_hex: String,
+}
+
+impl SszStaticRequest {
+    /// Parse one 4-field `ssz_static` line.
+    pub(crate) fn parse(line: &str) -> Result<Self, String> {
+        let line = line.trim_end_matches(['\r', '\n']);
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() != 4 {
+            return Err(format!("expected 4 fields, got {}", f.len()));
+        }
+        Ok(Self {
+            handler: f[1].to_string(),
+            serialized: PathBuf::from(f[2]),
+            root_hex: f[3].to_string(),
+        })
+    }
+}
+
 /// A single `pyspec_server` response: pass or fail with a bucket tag and detail.
 pub(crate) struct Verdict {
     /// Whether the test case passed.
@@ -186,5 +212,19 @@ mod tests {
     #[test]
     fn pass_verdict_line_format() {
         assert_eq!(Verdict::pass("ok", "").line(), "pass\tok\t");
+    }
+
+    #[test]
+    fn ssz_static_request_parses_four_fields() {
+        let r = SszStaticRequest::parse("ssz_static\tCheckpoint\t/t/serialized.ssz\t0xabcd").unwrap();
+        assert_eq!(r.handler, "Checkpoint");
+        assert_eq!(r.serialized, std::path::PathBuf::from("/t/serialized.ssz"));
+        assert_eq!(r.root_hex, "0xabcd");
+    }
+
+    #[test]
+    fn ssz_static_request_rejects_wrong_field_count() {
+        assert!(SszStaticRequest::parse("ssz_static\tCheckpoint\t/t/s.ssz").is_err());
+        assert!(SszStaticRequest::parse("ssz_static\tA\t/t/s.ssz\t0x1\textra").is_err());
     }
 }
