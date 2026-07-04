@@ -3,9 +3,12 @@
 //! Reads tab-delimited case requests from stdin and writes `pass|fail` verdict
 //! lines to stdout, one per line, following the `pyspec_server` wire protocol.
 
+mod epoch;
 mod operations;
 mod protocol;
+mod runner;
 mod ssz_static;
+mod verdict;
 
 use protocol::{CaseRequest, SszStaticRequest, Verdict};
 use std::io::{BufRead, Write};
@@ -44,9 +47,17 @@ fn respond(line: &str) -> Verdict {
         .split('\t')
         .next()
         .unwrap_or_default();
+    // TODO: the operations/epoch_processing arms are near-identical: parse a
+    // CaseRequest, run, map a parse error to a bug. Each 10-field runner still
+    // to land (finality/random/rewards/sanity) adds another copy; collapse the
+    // family to a name->run-fn table once there are enough to justify it.
     match first {
         "operations" => match CaseRequest::parse(line) {
             Ok(req) => operations::run(&req),
+            Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
+        },
+        "epoch_processing" => match CaseRequest::parse(line) {
+            Ok(req) => epoch::run(&req),
             Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
         },
         "ssz_static" => match SszStaticRequest::parse(line) {
@@ -57,7 +68,7 @@ fn respond(line: &str) -> Verdict {
             "skip",
             format!("unmodeled upstream: {first} has no moonglass-core API"),
         ),
-        "epoch_processing" | "finality" | "fork_choice" | "random" | "rewards" | "sanity" => {
+        "finality" | "fork_choice" | "random" | "rewards" | "sanity" => {
             Verdict::fail("todo", format!("unsupported runner {first}"))
         }
         _ => Verdict::fail("todo", format!("unsupported verb {first}")),
@@ -143,6 +154,17 @@ mod tests {
     fn malformed_line_for_an_implemented_runner_is_still_a_bug() {
         assert_eq!(
             respond("operations\tattestation").line(),
+            "fail\tbug\tbad request line: expected 10 fields, got 2"
+        );
+    }
+
+    #[test]
+    fn epoch_processing_malformed_line_is_a_bug() {
+        // epoch_processing now dispatches through CaseRequest::parse; a
+        // wrong-field-count line is a harness-contract violation, like any
+        // implemented 10-field runner.
+        assert_eq!(
+            respond("epoch_processing\tslashings").line(),
             "fail\tbug\tbad request line: expected 10 fields, got 2"
         );
     }

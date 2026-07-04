@@ -3,6 +3,7 @@
 //! verdict model: a faithful rejection of an invalid vector is a pass).
 
 use crate::protocol::{CaseRequest, Verdict};
+use crate::runner::{decode_pre, finish};
 use moonglass_core::containers::{
     Attestation, AttesterSlashing, BeaconBlock, BeaconState, BuilderDepositRequest,
     BuilderExitRequest, ConsolidationRequest, DepositRequest, PayloadAttestation, ProposerSlashing,
@@ -10,45 +11,7 @@ use moonglass_core::containers::{
     WithdrawalRequest,
 };
 use moonglass_core::error::TransitionError;
-use moonglass_core::ssz::{Deserialize, Serialize};
-
-/// Pure verdict table. `result` is the transition outcome (error stringified),
-/// `got_post` the canonical SSZ of the resulting state, `expected_post` the
-/// expected-post file bytes (None = the vector is invalid, a reject is expected).
-pub(crate) fn classify(
-    result: Result<(), String>,
-    got_post: &[u8],
-    expected_post: Option<&[u8]>,
-) -> Verdict {
-    match (result, expected_post) {
-        (Ok(()), Some(exp)) if got_post == exp => Verdict::pass("ok", ""),
-        (Ok(()), Some(exp)) => {
-            let detail = if got_post.len() == exp.len() {
-                let offset = got_post
-                    .iter()
-                    .zip(exp.iter())
-                    .position(|(a, b)| a != b)
-                    .unwrap_or(0);
-                format!(
-                    "post differs: got {} B, want {} B, first diff at byte {}",
-                    got_post.len(),
-                    exp.len(),
-                    offset
-                )
-            } else {
-                format!(
-                    "post differs: got {} B, want {} B",
-                    got_post.len(),
-                    exp.len()
-                )
-            };
-            Verdict::fail("mismatch", detail)
-        }
-        (Err(e), Some(_)) => Verdict::fail("reject-valid", e),
-        (Err(e), None) => Verdict::pass("reject", e),
-        (Ok(()), None) => Verdict::fail("accept-invalid", "ran clean, reject expected"),
-    }
-}
+use moonglass_core::ssz::Deserialize;
 
 /// Decode a single SSZ operation of type `T` from `op_bytes` then call
 /// `apply(state, &op)`, converting both error kinds to `String`.
@@ -77,7 +40,7 @@ enum Dispatch {
 /// `moonglass/tests/src/adapters/operations.rs` (AGPL-3.0-only; same license
 /// as this crate). Container types and `BeaconState` method names match the
 /// adapter's statics (lines 197–261 of that file).
-/// Returns `None` for an unknown handler — never touches the filesystem.
+/// Returns `None` for an unknown handler; never touches the filesystem.
 fn dispatch_for(handler: &str) -> Option<Dispatch> {
     Some(match handler {
         "attestation" => Dispatch::Input(|s, b| {
@@ -177,16 +140,9 @@ pub(crate) fn run(req: &CaseRequest) -> Verdict {
         );
     };
 
-    let Some(pre_path) = &req.pre else {
-        return Verdict::fail("bug", "operations case without a pre state");
-    };
-    let pre_bytes = match std::fs::read(pre_path) {
-        Ok(b) => b,
-        Err(e) => return Verdict::fail("bug", format!("read pre: {e}")),
-    };
-    let mut state = match BeaconState::deserialize(&pre_bytes) {
-        Ok(s) => s,
-        Err(e) => return Verdict::fail("bug", format!("decode pre: {e:?}")),
+    let (pre_bytes, mut state) = match decode_pre(req, "operations") {
+        Ok(pair) => pair,
+        Err(v) => return v,
     };
 
     // Read the operation bytes only for input-based handlers; state-only
@@ -203,31 +159,38 @@ pub(crate) fn run(req: &CaseRequest) -> Verdict {
         Dispatch::StateOnly(f) => f(&mut state),
     };
 
-    // Only serialize the post state on the success path; an errored state may
-    // be in a partial/inconsistent state and got_post is unused by classify
-    // when result is Err.
-    let mut got_post = Vec::new();
-    if result.is_ok()
-        && let Err(e) = state.serialize(&mut got_post)
-    {
-        return Verdict::fail("bug", format!("serialize post: {e}"));
-    }
-
-    let expected_post = match &req.post {
-        Some(p) => match std::fs::read(p) {
-            Ok(b) => Some(b),
-            Err(e) => return Verdict::fail("bug", format!("read post: {e}")),
-        },
-        None => None,
-    };
-
-    classify(result, &got_post, expected_post.as_deref())
+    finish(result, &state, pre_bytes.len(), req)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// The 17 wire handler names `operations` dispatches, one per adapter static
+    /// (`voluntary_exit_churn` shares `process_voluntary_exit`). Kept in lockstep
+    /// with `dispatch_for` so a dropped arm fails the completeness test below.
+    /// `builder_deposit_request`/`builder_exit_request` are served but have no
+    /// gloas fixtures at the vendored vectors version yet.
+    const HANDLERS_FOR_TEST: &[&str] = &[
+        "attestation",
+        "attester_slashing",
+        "proposer_slashing",
+        "voluntary_exit",
+        "voluntary_exit_churn",
+        "bls_to_execution_change",
+        "sync_aggregate",
+        "block_header",
+        "payload_attestation",
+        "deposit_request",
+        "builder_deposit_request",
+        "builder_exit_request",
+        "withdrawal_request",
+        "consolidation_request",
+        "execution_payload_bid",
+        "parent_execution_payload",
+        "withdrawals",
+    ];
 
     fn req_stub(handler: &str, bls_setting: u8) -> CaseRequest {
         CaseRequest {
@@ -242,52 +205,6 @@ mod tests {
             fork_block: None,
             execution_valid: false,
         }
-    }
-
-    // --- classify tests ---
-
-    #[test]
-    fn valid_vector_with_matching_post_passes() {
-        let v = classify(Ok(()), b"abc", Some(b"abc"));
-        assert_eq!(v.line(), "pass\tok\t");
-    }
-
-    #[test]
-    fn valid_vector_with_differing_post_fails_as_mismatch() {
-        let v = classify(Ok(()), b"abc", Some(b"abd"));
-        assert!(v.line().starts_with("fail\tmismatch\t"));
-        // Equal lengths → first-diff offset is included in the detail.
-        assert!(v.line().contains("first diff at byte 2"));
-    }
-
-    #[test]
-    fn mismatch_detail_shows_lengths_when_different() {
-        let v = classify(Ok(()), b"short", Some(b"longer_expected"));
-        let line = v.line();
-        assert!(line.starts_with("fail\tmismatch\t"));
-        assert!(line.contains("got 5 B"));
-        assert!(line.contains("want 15 B"));
-        assert!(!line.contains("first diff at byte"));
-    }
-
-    #[test]
-    fn invalid_vector_rejected_passes() {
-        let v = classify(Err("bad sig".to_string()), &[], None);
-        assert!(v.line().starts_with("pass\treject\t"));
-        assert!(v.line().ends_with("bad sig"));
-    }
-
-    #[test]
-    fn invalid_vector_accepted_fails() {
-        let v = classify(Ok(()), b"abc", None);
-        assert!(v.line().starts_with("fail\taccept-invalid\t"));
-    }
-
-    #[test]
-    fn valid_vector_rejected_fails() {
-        let v = classify(Err("spurious".to_string()), &[], Some(b"abc"));
-        assert!(v.line().starts_with("fail\treject-valid\t"));
-        assert!(v.line().ends_with("spurious"));
     }
 
     // --- run() unit tests (no fixture files needed) ---
@@ -315,5 +232,12 @@ mod tests {
         let line = run(&req).line();
         assert!(line.starts_with("fail\ttodo\t"));
         assert!(line.contains("no_such_handler"));
+    }
+
+    #[test]
+    fn every_documented_handler_dispatches() {
+        for h in HANDLERS_FOR_TEST {
+            assert!(dispatch_for(h).is_some(), "{h} missing from the table");
+        }
     }
 }

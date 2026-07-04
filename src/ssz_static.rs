@@ -4,6 +4,7 @@
 //! The wire delivers decompressed bytes and the expected root directly.
 
 use crate::protocol::{SszStaticRequest, Verdict};
+use crate::verdict::byte_diff_detail;
 use moonglass_core::containers::{
     AggregateAndProof, Attestation, AttestationData, AttesterSlashing, BLSToExecutionChange,
     BeaconBlock, BeaconBlockBody, BeaconBlockHeader, BeaconState, Builder, BuilderDepositRequest,
@@ -78,19 +79,7 @@ where
         return Verdict::fail("reject-valid", format!("re-serialize: {e:?}"));
     }
     if reencoded != bytes {
-        let first_diff = reencoded
-            .iter()
-            .zip(bytes.iter())
-            .position(|(a, b)| a != b)
-            .unwrap_or_else(|| reencoded.len().min(bytes.len()));
-        return Verdict::fail(
-            "mismatch",
-            format!(
-                "round-trip differs: got {} B, want {} B, first diff at byte {first_diff}",
-                reencoded.len(),
-                bytes.len(),
-            ),
-        );
+        return Verdict::fail("mismatch", byte_diff_detail("round-trip differs", &reencoded, bytes));
     }
     let node = match value.hash_tree_root() {
         Ok(n) => n,
