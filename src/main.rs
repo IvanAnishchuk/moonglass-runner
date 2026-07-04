@@ -6,6 +6,7 @@
 mod operations;
 mod protocol;
 mod ssz_static;
+mod verdict;
 
 use protocol::{CaseRequest, SszStaticRequest, Verdict};
 use std::io::{BufRead, Write};
