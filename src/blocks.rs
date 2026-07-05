@@ -63,8 +63,8 @@ fn decode_slots_count(bytes: &[u8]) -> Result<u64, String> {
 
 /// Upper bound on a `sanity/slots` advance. The largest legitimate advance in the
 /// corpus is `historical_accumulator`, which advances `SLOTS_PER_HISTORICAL_ROOT`
-/// (64 minimal / 8192 mainnet), so this tracks the active preset with 2× headroom
-/// — still refusing a runaway or hostile count before it livelocks the
+/// (64 minimal / 8192 mainnet), so this tracks the active preset with 2× headroom.
+/// That still refuses a runaway or hostile count before it livelocks the
 /// one-slot-at-a-time `process_slots` loop. A fixed literal here silently rejected
 /// the mainnet `historical_accumulator` (8192 exceeded the old 4096).
 const MAX_SLOTS_ADVANCE: u64 = SLOTS_PER_HISTORICAL_ROOT as u64 * 2;
@@ -147,18 +147,27 @@ pub(crate) fn run(req: &CaseRequest) -> Verdict {
         );
     };
 
-    // A blocks-shaped case must carry exactly as many block inputs as its
-    // field-6 `blocks_count`. A disagreement is an internally inconsistent
-    // request we cannot run faithfully: applying whatever inputs happened to
-    // arrive could silently false-pass a differential case, so it is a bug,
-    // surfaced before any file I/O. Slots cases legitimately carry
-    // `blocks_count == 0` alongside their single input, so this guard is
-    // blocks-shaped only (the slots driver checks its own arity).
-    if matches!(shape, Shape::Blocks) && req.blocks_count != req.inputs.len() {
-        return Verdict::fail(
-            "bug",
-            format!("blocks_count {} != {} block inputs", req.blocks_count, req.inputs.len()),
-        );
+    // Validate each shape's arity before any file I/O, per the harness contract
+    // that an inconsistent request is a bug caught before reads. A blocks case
+    // carries exactly as many block inputs as its field-6 `blocks_count`; a slots
+    // case carries exactly one `slots_count` blob. A disagreement is an internally
+    // inconsistent request we cannot run faithfully (applying whatever inputs
+    // arrived could silently false-pass a differential case), so it is a bug.
+    // `apply_slots` keeps its own single-input guard as a defensive backstop.
+    match shape {
+        Shape::Blocks if req.blocks_count != req.inputs.len() => {
+            return Verdict::fail(
+                "bug",
+                format!("blocks_count {} != {} block inputs", req.blocks_count, req.inputs.len()),
+            );
+        }
+        Shape::Slots if req.inputs.len() != 1 => {
+            return Verdict::fail(
+                "bug",
+                format!("sanity/slots expects one slots_count input, got {}", req.inputs.len()),
+            );
+        }
+        _ => {}
     }
 
     let (pre_bytes, mut state) = match decode_pre(req, &req.runner) {
@@ -180,10 +189,10 @@ pub(crate) fn run(req: &CaseRequest) -> Verdict {
 mod tests {
     use super::*;
 
-    // TODO(ivan-epf-research#42): these cover routing and the gate checks only;
+    // TODO(ivan-epf-research#42): these cover routing and the gate checks only.
     // apply_blocks/apply_slots -> process_slots/state_transition -> classify (the
-    // verdict-producing path) is exercised only by the consensus-diff differential
-    // sweep, not by any in-crate test. Add a fixture-backed apply-path test.
+    // verdict-producing path) runs only under the consensus-diff differential
+    // sweep, with no in-crate test yet. Add a fixture-backed apply-path test.
 
     #[test]
     fn slots_count_decodes_big_endian_minimal() {
@@ -197,12 +206,23 @@ mod tests {
     }
 
     #[test]
+    fn slots_arity_is_a_bug_before_io() {
+        // A sanity/slots case carries exactly one slots_count input. A wrong count
+        // is a bug caught before decode_pre touches the filesystem: the stub has no
+        // pre, so a pre-read would otherwise report "case without a pre state".
+        let req = CaseRequest::stub("sanity", "slots", 1); // zero inputs, no pre
+        let line = run(&req).line();
+        assert!(line.starts_with("fail\tbug\t"), "{line}");
+        assert!(line.contains("slots_count input"), "{line}");
+    }
+
+    #[test]
     fn slots_advance_range_rejects_zero_and_absurd() {
         assert!(check_slots_advance(0).is_err()); // no-op advance can't run
         assert!(check_slots_advance(1).is_ok());
         // historical_accumulator, the largest legitimate advance, scales with the
-        // preset (64 minimal / 8192 mainnet) and must be accepted under either —
-        // the regression a fixed 4096 cap silently rejected on mainnet.
+        // preset (64 minimal / 8192 mainnet) and must be accepted under either.
+        // A fixed 4096 cap silently rejected that advance on mainnet (the regression).
         assert!(check_slots_advance(SLOTS_PER_HISTORICAL_ROOT as u64).is_ok());
         assert!(check_slots_advance(MAX_SLOTS_ADVANCE).is_ok());
         assert!(check_slots_advance(MAX_SLOTS_ADVANCE + 1).is_err());
@@ -231,10 +251,10 @@ mod tests {
 
     #[test]
     fn finality_and_random_route_to_blocks() {
-        // Prove the Blocks route (not Slots) resolved: a blocks_count that disagrees
-        // with the (empty) inputs trips the Blocks-only arity guard — a bug that
-        // names blocks_count, and one the Slots shape never produces. The missing-pre
-        // bug alone can't tell the shapes apart, since both hit decode_pre.
+        // Prove the Blocks route resolved: a blocks_count that disagrees with the
+        // (empty) inputs trips the Blocks arity guard, a bug that names blocks_count
+        // and that only the Blocks shape produces. The missing-pre bug alone leaves
+        // the two shapes indistinguishable, since both reach decode_pre.
         for (runner, handler) in [("finality", "finality"), ("random", "random")] {
             let mut req = CaseRequest::stub(runner, handler, 1);
             req.blocks_count = 1; // claims one block, carries none
