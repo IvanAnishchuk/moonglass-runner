@@ -16,7 +16,7 @@ use moonglass_core::primitives::Slot;
 use moonglass_core::ssz::Deserialize;
 
 /// The outcome of one shape driver: `Err(Verdict)` is a harness bug that
-/// short-circuits (the adapter's `StateTransition::HarnessError` — a fixture it
+/// short-circuits (the adapter's `StateTransition::HarnessError`, a fixture it
 /// could not read or decode); `Ok(inner)` is the transition result to hand to
 /// `classify` (the adapter's `Applied`, stringified).
 type Driven = Result<Result<(), String>, Verdict>;
@@ -31,12 +31,14 @@ enum Shape {
 }
 
 /// Route a `(runner, handler)` pair to its case shape, or `None` for an
-/// unsupported sanity handler (todo). `finality` and `random` are blocks-shaped
-/// whatever their single handler, matching the adapter's three `CaseRunner`
-/// impls that all funnel into one `run_shared`.
+/// unsupported handler (todo). Each of `finality` and `random` pins to its one
+/// real handler name, matching the adapter's three `CaseRunner` impls that all
+/// funnel into one `run_shared`.
 fn shape_for(runner: &str, handler: &str) -> Option<Shape> {
     match (runner, handler) {
-        ("sanity", "blocks") | ("finality" | "random", _) => Some(Shape::Blocks),
+        ("sanity", "blocks") | ("finality", "finality") | ("random", "random") => {
+            Some(Shape::Blocks)
+        }
         ("sanity", "slots") => Some(Shape::Slots),
         _ => None,
     }
@@ -47,6 +49,9 @@ fn shape_for(runner: &str, handler: &str) -> Option<Shape> {
 fn decode_slots_count(bytes: &[u8]) -> Result<u64, String> {
     if bytes.is_empty() || bytes.len() > 8 {
         return Err(format!("slots blob must be 1..=8 bytes, got {}", bytes.len()));
+    }
+    if bytes.len() > 1 && bytes[0] == 0 {
+        return Err("slots blob must use minimal big-endian encoding".to_string());
     }
     let mut v: u64 = 0;
     for &b in bytes {
@@ -72,8 +77,9 @@ fn check_slots_advance(advance: u64) -> Result<(), String> {
 }
 
 /// Apply each `inputs` block in order, stopping at the first transition error.
-/// The loop is driven by `inputs` (already numerically ordered by the harness),
-/// not `blocks_count`; the two agree on every fixture the harness emits.
+/// The loop iterates `inputs` (already numerically ordered by the harness); the
+/// separate `blocks_count` field only guards arity, and the two agree on every
+/// fixture the harness emits.
 fn apply_blocks(state: &mut BeaconState, req: &CaseRequest) -> Driven {
     // Blocks apply in wire order (the harness delivers them numerically sorted).
     // A mis-ordered sequence can't pass silently: state_transition advances to
@@ -93,10 +99,10 @@ fn apply_blocks(state: &mut BeaconState, req: &CaseRequest) -> Driven {
 
 /// Advance the state by the slot count in the case's single input blob. Slot
 /// arithmetic follows the adapter: a `u64` overflow on `current + advance` is a
-/// harness bug, not a transition error.
+/// harness bug (the transition never runs).
 fn apply_slots(state: &mut BeaconState, req: &CaseRequest) -> Driven {
     // A slots case carries exactly one `slots_count` blob; zero or more than one
-    // is an inconsistent request (bug), not a case we guess our way through.
+    // is an inconsistent request, so the driver rejects it as a bug.
     let [path] = req.inputs.as_slice() else {
         return Err(Verdict::fail(
             "bug",
@@ -120,11 +126,11 @@ fn apply_slots(state: &mut BeaconState, req: &CaseRequest) -> Driven {
 /// the blocks or slots driver, decode the pre-state, apply, and classify against
 /// the expected post.
 ///
-/// `bls_setting` == 2 (BLS-disabled) has no verify-off path in moonglass-core —
-/// block application always verifies signatures — so those cases are todo, the
-/// same gate `operations::run` applies. Slots cases verify no signatures, but the
-/// gloas corpus carries no `bls_setting: 2` slots case, so the shared gate costs
-/// no coverage and keeps the family consistent with `operations`.
+/// `bls_setting` == 2 (BLS-disabled) has no verify-off path in moonglass-core,
+/// where block application always verifies signatures, so those cases are todo,
+/// the same gate `operations::run` applies. Slots cases verify no signatures,
+/// but the gloas corpus carries no `bls_setting: 2` slots case, so the shared
+/// gate costs no coverage and keeps the family consistent with `operations`.
 pub(crate) fn run(req: &CaseRequest) -> Verdict {
     if req.bls_setting == 2 {
         return Verdict::fail("todo", "bls_setting=2 unsupported");
@@ -140,9 +146,9 @@ pub(crate) fn run(req: &CaseRequest) -> Verdict {
     };
 
     // A blocks-shaped case must carry exactly as many block inputs as its
-    // field-6 `blocks_count`; a disagreement is an internally inconsistent
-    // request we cannot run faithfully — applying whatever inputs happened to
-    // arrive could silently false-pass a differential case — so it is a bug,
+    // field-6 `blocks_count`. A disagreement is an internally inconsistent
+    // request we cannot run faithfully: applying whatever inputs happened to
+    // arrive could silently false-pass a differential case, so it is a bug,
     // surfaced before any file I/O. Slots cases legitimately carry
     // `blocks_count == 0` alongside their single input, so this guard is
     // blocks-shaped only (the slots driver checks its own arity).
@@ -195,6 +201,7 @@ mod tests {
         assert_eq!(decode_slots_count(&[0x00]).unwrap(), 0);
         assert!(decode_slots_count(&[]).is_err());
         assert!(decode_slots_count(&[0u8; 9]).is_err()); // > u64
+        assert!(decode_slots_count(&[0x00, 0x01]).is_err()); // non-minimal leading zero
     }
 
     #[test]
@@ -229,12 +236,21 @@ mod tests {
 
     #[test]
     fn finality_and_random_route_to_blocks() {
-        // Both runners are blocks-shaped; a missing pre must be a bug (i.e. they
-        // dispatched), not a todo.
+        // Both runners are blocks-shaped, so a dispatched case bottoms out at
+        // the missing-pre bug, confirming the route resolved.
         for r in ["finality", "random"] {
             let mut req = req_stub_runner(r, "finality", 1);
             req.handler = if r == "random" { "random".into() } else { "finality".into() };
             assert!(run(&req).line().starts_with("fail\tbug\t"), "{r}");
         }
+    }
+
+    #[test]
+    fn finality_random_reject_unexpected_handler() {
+        // The routing table pins each runner to its one real handler name, so a
+        // stray or future handler resolves to todo (the blocks route needs the
+        // exact name).
+        assert!(run(&req_stub_runner("finality", "slots", 1)).line().starts_with("fail\ttodo\t"));
+        assert!(run(&req_stub_runner("random", "blocks", 1)).line().starts_with("fail\ttodo\t"));
     }
 }

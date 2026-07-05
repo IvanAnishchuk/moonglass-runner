@@ -53,7 +53,7 @@ fn state_runner(first: &str) -> Option<fn(&CaseRequest) -> Verdict> {
 /// Dispatch one request line on its first field, then parse, then run.
 ///
 /// Order is semantic: implemented runners parse strictly (malformed line =
-/// `bug`) — the 10-field family via [`state_runner`], `ssz_static` on its own
+/// `bug`), the 10-field family via [`state_runner`] and `ssz_static` on its own
 /// 4-field line; runners moonglass-core cannot serve by upstream design (no
 /// genesis-builder, no `upgrade_to_*` API) answer `skip`; protocol runners not
 /// yet implemented answer `todo`; anything else is an unknown verb
@@ -160,7 +160,8 @@ mod tests {
     #[test]
     fn sanity_now_dispatches_and_missing_pre_is_a_bug() {
         // sanity is implemented now: a well-formed line for a known handler runs
-        // the blocks driver, so a missing pre file is a bug, not a todo.
+        // the blocks driver, so a missing pre file surfaces as a bug once the
+        // route resolves.
         let line = "sanity\tblocks\t/t/pre.ssz\t/t/post.ssz\t1\t2\t-\t/t/blocks_0.ssz,/t/blocks_1.ssz\t-\t1";
         assert!(respond(line).line().starts_with("fail\tbug\t"));
     }
@@ -204,7 +205,8 @@ mod tests {
     #[test]
     fn unmodeled_runners_answer_skip() {
         // moonglass-core deliberately has no genesis-builder or upgrade_to_* API;
-        // these are skip (deliberately unmodeled), not todo (coverage debt).
+        // these answer skip (deliberately unmodeled), leaving todo for real
+        // coverage debt.
         for runner in ["genesis", "fork", "transition"] {
             let line = format!("{runner}\tsome_handler\t/t/pre.ssz\t-\t1\t0\t-\t\t-\t1");
             assert_eq!(
