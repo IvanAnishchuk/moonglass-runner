@@ -17,12 +17,8 @@ pub(crate) fn split_fields(line: &str, want: usize) -> Result<Vec<&str>, String>
 
 /// A single `pyspec_server` request decoded from one tab-delimited stdin line.
 pub(crate) struct CaseRequest {
-    /// Test runner name (e.g. `operations`).
-    // Dispatch happens on the raw first field before parsing (see main.rs
-    // `respond`), so nothing reads the decoded copy until the non-operations
-    // 10-field runners are implemented.
-    // TODO(ivan-epf-research#41): consumed by the non-operations runners.
-    #[allow(dead_code)]
+    /// Test runner name (e.g. `operations`); the `blocks` family reads it to
+    /// route within a runner group (sanity vs finality vs random).
     pub(crate) runner: String,
     /// Handler within the runner (e.g. `attestation`).
     pub(crate) handler: String,
@@ -32,9 +28,8 @@ pub(crate) struct CaseRequest {
     pub(crate) post: Option<PathBuf>,
     /// BLS setting flag from the wire protocol (0 = BLS on, 2 = BLS off).
     pub(crate) bls_setting: u8,
-    /// Number of blocks in the test vector (M1 runners; unused by operations).
-    // TODO(ivan-epf-research#41): consumed by the non-operations runners.
-    #[allow(dead_code)]
+    /// Number of blocks the blocks-shaped runners (`sanity`/`finality`/`random`)
+    /// expect; checked against the input count before applying them.
     pub(crate) blocks_count: usize,
     /// Fork epoch override; `None` when absent.
     // TODO(ivan-epf-research#41): consumed by the non-operations runners.

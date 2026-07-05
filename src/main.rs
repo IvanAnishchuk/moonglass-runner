@@ -3,6 +3,7 @@
 //! Reads tab-delimited case requests from stdin and writes `pass|fail` verdict
 //! lines to stdout, one per line, following the `pyspec_server` wire protocol.
 
+mod blocks;
 mod epoch;
 mod operations;
 mod protocol;
@@ -34,10 +35,26 @@ const COMPILED_PRESET: &str = if cfg!(feature = "minimal") { "minimal" } else { 
 /// This bin target's name, one target per preset, see `[[bin]]` in Cargo.toml.
 const BIN_NAME: &str = env!("CARGO_BIN_NAME");
 
+/// Map a runner name to its module entry point, for the runners that share the
+/// 10-field `CaseRequest` wire shape. These arms are otherwise identical (parse
+/// a `CaseRequest`, run, map a parse error to a bug), so the table replaces one
+/// near-duplicate `match` arm per runner. `rewards` joins here once implemented;
+/// `ssz_static` parses a different (4-field) line and `fork_choice` a different
+/// grammar, so they stay their own arms in [`respond`].
+fn state_runner(first: &str) -> Option<fn(&CaseRequest) -> Verdict> {
+    Some(match first {
+        "operations" => operations::run,
+        "epoch_processing" => epoch::run,
+        "sanity" | "finality" | "random" => blocks::run,
+        _ => return None,
+    })
+}
+
 /// Dispatch one request line on its first field, then parse, then run.
 ///
-/// Order of arms is semantic: implemented runners parse strictly (malformed
-/// line = `bug`); runners moonglass-core cannot serve by upstream design (no
+/// Order is semantic: implemented runners parse strictly (malformed line =
+/// `bug`) — the 10-field family via [`state_runner`], `ssz_static` on its own
+/// 4-field line; runners moonglass-core cannot serve by upstream design (no
 /// genesis-builder, no `upgrade_to_*` API) answer `skip`; protocol runners not
 /// yet implemented answer `todo`; anything else is an unknown verb
 /// (consensus-diff `docs/protocol.md` §7).
@@ -47,19 +64,13 @@ fn respond(line: &str) -> Verdict {
         .split('\t')
         .next()
         .unwrap_or_default();
-    // TODO: the operations/epoch_processing arms are near-identical: parse a
-    // CaseRequest, run, map a parse error to a bug. Each 10-field runner still
-    // to land (finality/random/rewards/sanity) adds another copy; collapse the
-    // family to a name->run-fn table once there are enough to justify it.
+    if let Some(run) = state_runner(first) {
+        return match CaseRequest::parse(line) {
+            Ok(req) => run(&req),
+            Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
+        };
+    }
     match first {
-        "operations" => match CaseRequest::parse(line) {
-            Ok(req) => operations::run(&req),
-            Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
-        },
-        "epoch_processing" => match CaseRequest::parse(line) {
-            Ok(req) => epoch::run(&req),
-            Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
-        },
         "ssz_static" => match SszStaticRequest::parse(line) {
             Ok(req) => ssz_static::run(&req),
             Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
@@ -68,7 +79,7 @@ fn respond(line: &str) -> Verdict {
             "skip",
             format!("unmodeled upstream: {first} has no moonglass-core API"),
         ),
-        "finality" | "fork_choice" | "random" | "rewards" | "sanity" => {
+        "fork_choice" | "rewards" => {
             Verdict::fail("todo", format!("unsupported runner {first}"))
         }
         _ => Verdict::fail("todo", format!("unsupported verb {first}")),
@@ -131,16 +142,29 @@ mod tests {
     }
 
     #[test]
-    fn known_ten_field_runner_answers_todo() {
-        let line = "sanity\tblocks\t/t/pre.ssz\t/t/post.ssz\t1\t2\t-\t/t/blocks_0.ssz,/t/blocks_1.ssz\t-\t1";
-        assert_eq!(respond(line).line(), "fail\ttodo\tunsupported runner sanity");
+    fn rewards_ten_field_line_answers_todo() {
+        // rewards is still an unimplemented runner: a well-formed 10-field line
+        // degrades to todo without parsing.
+        let line = "rewards\tbasic\t/t/pre.ssz\t/t/post.ssz\t1\t0\t-\t-\t-\t1";
+        assert_eq!(respond(line).line(), "fail\ttodo\tunsupported runner rewards");
     }
 
     #[test]
-    fn known_runner_degrades_before_shape_parsing() {
-        // A truncated line for an unimplemented runner is a coverage gap,
-        // not a contract violation: no field-count check happens first.
-        assert_eq!(respond("sanity\tblocks").line(), "fail\ttodo\tunsupported runner sanity");
+    fn sanity_now_dispatches_and_missing_pre_is_a_bug() {
+        // sanity is implemented now: a well-formed line for a known handler runs
+        // the blocks driver, so a missing pre file is a bug, not a todo.
+        let line = "sanity\tblocks\t/t/pre.ssz\t/t/post.ssz\t1\t2\t-\t/t/blocks_0.ssz,/t/blocks_1.ssz\t-\t1";
+        assert!(respond(line).line().starts_with("fail\tbug\t"));
+    }
+
+    #[test]
+    fn sanity_malformed_line_is_a_bug() {
+        // A wrong-field-count line for an implemented runner is a
+        // harness-contract violation, like operations and epoch_processing.
+        assert_eq!(
+            respond("sanity\tblocks").line(),
+            "fail\tbug\tbad request line: expected 10 fields, got 2"
+        );
     }
 
     #[test]
