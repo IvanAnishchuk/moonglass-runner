@@ -55,10 +55,30 @@ fn decode_slots_count(bytes: &[u8]) -> Result<u64, String> {
     Ok(v)
 }
 
+/// Upper bound on a `sanity/slots` advance. The corpus max is 64 slots (a couple
+/// epochs); 4096 is generous headroom that still refuses a runaway or hostile
+/// count before it livelocks the one-slot-at-a-time `process_slots` loop.
+const MAX_SLOTS_ADVANCE: u64 = 4096;
+
+/// Sanity-check a decoded slot advance. 0 cannot run (`process_slots` requires a
+/// strictly-later slot, so a 0 advance would be scored as a false `reject-valid`)
+/// and an absurd count would livelock, so the advance must sit in
+/// `1..=MAX_SLOTS_ADVANCE`.
+fn check_slots_advance(advance: u64) -> Result<(), String> {
+    if advance == 0 || advance > MAX_SLOTS_ADVANCE {
+        return Err(format!("slots advance {advance} outside the sane range 1..={MAX_SLOTS_ADVANCE}"));
+    }
+    Ok(())
+}
+
 /// Apply each `inputs` block in order, stopping at the first transition error.
 /// The loop is driven by `inputs` (already numerically ordered by the harness),
 /// not `blocks_count`; the two agree on every fixture the harness emits.
 fn apply_blocks(state: &mut BeaconState, req: &CaseRequest) -> Driven {
+    // Blocks apply in wire order (the harness delivers them numerically sorted).
+    // A mis-ordered sequence can't pass silently: state_transition advances to
+    // each block's slot and requires it strictly after the current state, so an
+    // out-of-order block rejects rather than producing a wrong post.
     for path in &req.inputs {
         let bytes = std::fs::read(path)
             .map_err(|e| Verdict::fail("bug", format!("read block {}: {e}", path.display())))?;
@@ -86,6 +106,7 @@ fn apply_slots(state: &mut BeaconState, req: &CaseRequest) -> Driven {
     let bytes = std::fs::read(path)
         .map_err(|e| Verdict::fail("bug", format!("read slots_count: {e}")))?;
     let advance = decode_slots_count(&bytes).map_err(|e| Verdict::fail("bug", e))?;
+    check_slots_advance(advance).map_err(|e| Verdict::fail("bug", e))?;
     let Some(target) = state.slot.0.checked_add(advance) else {
         return Err(Verdict::fail(
             "bug",
@@ -174,6 +195,15 @@ mod tests {
         assert_eq!(decode_slots_count(&[0x00]).unwrap(), 0);
         assert!(decode_slots_count(&[]).is_err());
         assert!(decode_slots_count(&[0u8; 9]).is_err()); // > u64
+    }
+
+    #[test]
+    fn slots_advance_range_rejects_zero_and_absurd() {
+        assert!(check_slots_advance(0).is_err()); // no-op advance can't run
+        assert!(check_slots_advance(1).is_ok());
+        assert!(check_slots_advance(64).is_ok()); // corpus max
+        assert!(check_slots_advance(MAX_SLOTS_ADVANCE).is_ok());
+        assert!(check_slots_advance(MAX_SLOTS_ADVANCE + 1).is_err());
     }
 
     #[test]

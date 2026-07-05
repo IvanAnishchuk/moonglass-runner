@@ -150,6 +150,14 @@ mod tests {
     }
 
     #[test]
+    fn pending_runner_short_line_stays_todo() {
+        // A truncated line for a not-yet-implemented 10-field runner degrades to
+        // todo without a field-count check: it hits the literal arm, never parses
+        // (the guardrail the old sanity degrade-before-parse test used to hold).
+        assert_eq!(respond("rewards\tbasic").line(), "fail\ttodo\tunsupported runner rewards");
+    }
+
+    #[test]
     fn sanity_now_dispatches_and_missing_pre_is_a_bug() {
         // sanity is implemented now: a well-formed line for a known handler runs
         // the blocks driver, so a missing pre file is a bug, not a todo.
