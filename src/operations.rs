@@ -193,18 +193,7 @@ mod tests {
     ];
 
     fn req_stub(handler: &str, bls_setting: u8) -> CaseRequest {
-        CaseRequest {
-            runner: "operations".to_string(),
-            handler: handler.to_string(),
-            pre: None,
-            post: None,
-            bls_setting,
-            blocks_count: 0,
-            fork_epoch: None,
-            inputs: Vec::new(),
-            fork_block: None,
-            execution_valid: false,
-        }
+        CaseRequest::stub("operations", handler, bls_setting)
     }
 
     // --- run() unit tests (no fixture files needed) ---

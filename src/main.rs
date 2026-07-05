@@ -50,6 +50,21 @@ fn state_runner(first: &str) -> Option<fn(&CaseRequest) -> Verdict> {
     })
 }
 
+/// Parse `line` with `parse`, run it with `run`, or answer `bug` on a malformed
+/// line — the shared "parse strictly, malformed = bug" contract every implemented
+/// runner follows, over whichever request grammar (`CaseRequest` or
+/// `SszStaticRequest`) it reads.
+fn dispatch_parsed<T>(
+    line: &str,
+    parse: fn(&str) -> Result<T, String>,
+    run: fn(&T) -> Verdict,
+) -> Verdict {
+    match parse(line) {
+        Ok(req) => run(&req),
+        Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
+    }
+}
+
 /// Dispatch one request line on its first field, then parse, then run.
 ///
 /// Order is semantic: implemented runners parse strictly (malformed line =
@@ -65,16 +80,10 @@ fn respond(line: &str) -> Verdict {
         .next()
         .unwrap_or_default();
     if let Some(run) = state_runner(first) {
-        return match CaseRequest::parse(line) {
-            Ok(req) => run(&req),
-            Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
-        };
+        return dispatch_parsed(line, CaseRequest::parse, run);
     }
     match first {
-        "ssz_static" => match SszStaticRequest::parse(line) {
-            Ok(req) => ssz_static::run(&req),
-            Err(e) => Verdict::fail("bug", format!("bad request line: {e}")),
-        },
+        "ssz_static" => dispatch_parsed(line, SszStaticRequest::parse, ssz_static::run),
         "fork" | "genesis" | "transition" => Verdict::fail(
             "skip",
             format!("unmodeled upstream: {first} has no moonglass-core API"),
@@ -158,10 +167,11 @@ mod tests {
     }
 
     #[test]
-    fn sanity_now_dispatches_and_missing_pre_is_a_bug() {
+    fn sanity_now_dispatches_and_unreadable_pre_is_a_bug() {
         // sanity is implemented now: a well-formed line for a known handler runs
-        // the blocks driver, so a missing pre file surfaces as a bug once the
-        // route resolves.
+        // the blocks driver instead of degrading to todo. The pre path here does
+        // not exist, so the dispatched case surfaces the read-pre bug — proof it
+        // dispatched at all (the old behavior answered todo without reading).
         let line = "sanity\tblocks\t/t/pre.ssz\t/t/post.ssz\t1\t2\t-\t/t/blocks_0.ssz,/t/blocks_1.ssz\t-\t1";
         assert!(respond(line).line().starts_with("fail\tbug\t"));
     }

@@ -78,6 +78,27 @@ impl CaseRequest {
     }
 }
 
+#[cfg(test)]
+impl CaseRequest {
+    /// A fixture-free request for routing / gate unit tests: no pre, post, or
+    /// inputs, so a dispatched case bottoms out at the missing-pre bug. Shared
+    /// across the runner test modules so a new field is added in one place.
+    pub(crate) fn stub(runner: &str, handler: &str, bls_setting: u8) -> Self {
+        Self {
+            runner: runner.to_string(),
+            handler: handler.to_string(),
+            pre: None,
+            post: None,
+            bls_setting,
+            blocks_count: 0,
+            fork_epoch: None,
+            inputs: Vec::new(),
+            fork_block: None,
+            execution_valid: false,
+        }
+    }
+}
+
 /// The 4-field `ssz_static` request: container name, serialized bytes, expected root.
 pub(crate) struct SszStaticRequest {
     /// Container type name (e.g. `BeaconBlock`).

@@ -10,7 +10,8 @@
 //! writes `n.to_bytes(max(1, ceil(bits/8)), "big")`).
 
 use crate::protocol::{CaseRequest, Verdict};
-use crate::runner::{decode_pre, finish};
+use crate::runner::{decode_pre, finish, read_input};
+use moonglass_core::constants::SLOTS_PER_HISTORICAL_ROOT;
 use moonglass_core::containers::{BeaconState, SignedBeaconBlock};
 use moonglass_core::primitives::Slot;
 use moonglass_core::ssz::Deserialize;
@@ -60,10 +61,13 @@ fn decode_slots_count(bytes: &[u8]) -> Result<u64, String> {
     Ok(v)
 }
 
-/// Upper bound on a `sanity/slots` advance. The corpus max is 64 slots (a couple
-/// epochs); 4096 is generous headroom that still refuses a runaway or hostile
-/// count before it livelocks the one-slot-at-a-time `process_slots` loop.
-const MAX_SLOTS_ADVANCE: u64 = 4096;
+/// Upper bound on a `sanity/slots` advance. The largest legitimate advance in the
+/// corpus is `historical_accumulator`, which advances `SLOTS_PER_HISTORICAL_ROOT`
+/// (64 minimal / 8192 mainnet), so this tracks the active preset with 2× headroom
+/// — still refusing a runaway or hostile count before it livelocks the
+/// one-slot-at-a-time `process_slots` loop. A fixed literal here silently rejected
+/// the mainnet `historical_accumulator` (8192 exceeded the old 4096).
+const MAX_SLOTS_ADVANCE: u64 = SLOTS_PER_HISTORICAL_ROOT as u64 * 2;
 
 /// Sanity-check a decoded slot advance. 0 cannot run (`process_slots` requires a
 /// strictly-later slot, so a 0 advance would be scored as a false `reject-valid`)
@@ -86,8 +90,7 @@ fn apply_blocks(state: &mut BeaconState, req: &CaseRequest) -> Driven {
     // each block's slot and requires it strictly after the current state, so an
     // out-of-order block rejects rather than producing a wrong post.
     for path in &req.inputs {
-        let bytes = std::fs::read(path)
-            .map_err(|e| Verdict::fail("bug", format!("read block {}: {e}", path.display())))?;
+        let bytes = read_input(path, &format!("block {}", path.display()))?;
         let block = SignedBeaconBlock::deserialize(&bytes)
             .map_err(|e| Verdict::fail("bug", format!("decode block {}: {e:?}", path.display())))?;
         if let Err(e) = state.state_transition(&block) {
@@ -109,8 +112,7 @@ fn apply_slots(state: &mut BeaconState, req: &CaseRequest) -> Driven {
             format!("sanity/slots expects one slots_count input, got {}", req.inputs.len()),
         ));
     };
-    let bytes = std::fs::read(path)
-        .map_err(|e| Verdict::fail("bug", format!("read slots_count: {e}")))?;
+    let bytes = read_input(path, "slots_count")?;
     let advance = decode_slots_count(&bytes).map_err(|e| Verdict::fail("bug", e))?;
     check_slots_advance(advance).map_err(|e| Verdict::fail("bug", e))?;
     let Some(target) = state.slot.0.checked_add(advance) else {
@@ -178,29 +180,19 @@ pub(crate) fn run(req: &CaseRequest) -> Verdict {
 mod tests {
     use super::*;
 
-    /// A fixture-free `CaseRequest` for the routing / gate tests: no pre, no
-    /// post, no inputs, so a dispatched case bottoms out at the missing-pre bug.
-    fn req_stub_runner(runner: &str, handler: &str, bls_setting: u8) -> CaseRequest {
-        CaseRequest {
-            runner: runner.to_string(),
-            handler: handler.to_string(),
-            pre: None,
-            post: None,
-            bls_setting,
-            blocks_count: 0,
-            fork_epoch: None,
-            inputs: Vec::new(),
-            fork_block: None,
-            execution_valid: false,
-        }
-    }
+    // TODO(ivan-epf-research#42): these cover routing and the gate checks only;
+    // apply_blocks/apply_slots -> process_slots/state_transition -> classify (the
+    // verdict-producing path) is exercised only by the consensus-diff differential
+    // sweep, not by any in-crate test. Add a fixture-backed apply-path test.
 
     #[test]
     fn slots_count_decodes_big_endian_minimal() {
         assert_eq!(decode_slots_count(&[0x01, 0x2c]).unwrap(), 300);
+        assert_eq!(decode_slots_count(&[0xff]).unwrap(), 255); // single non-minimal-looking byte
+        assert_eq!(decode_slots_count(&[0xff; 8]).unwrap(), u64::MAX); // 8-byte upper boundary
         assert_eq!(decode_slots_count(&[0x00]).unwrap(), 0);
-        assert!(decode_slots_count(&[]).is_err());
-        assert!(decode_slots_count(&[0u8; 9]).is_err()); // > u64
+        assert!(decode_slots_count(&[]).is_err()); // empty blob
+        assert!(decode_slots_count(&[0u8; 9]).is_err()); // 9 bytes exceeds the u64 width
         assert!(decode_slots_count(&[0x00, 0x01]).is_err()); // non-minimal leading zero
     }
 
@@ -208,26 +200,29 @@ mod tests {
     fn slots_advance_range_rejects_zero_and_absurd() {
         assert!(check_slots_advance(0).is_err()); // no-op advance can't run
         assert!(check_slots_advance(1).is_ok());
-        assert!(check_slots_advance(64).is_ok()); // corpus max
+        // historical_accumulator, the largest legitimate advance, scales with the
+        // preset (64 minimal / 8192 mainnet) and must be accepted under either —
+        // the regression a fixed 4096 cap silently rejected on mainnet.
+        assert!(check_slots_advance(SLOTS_PER_HISTORICAL_ROOT as u64).is_ok());
         assert!(check_slots_advance(MAX_SLOTS_ADVANCE).is_ok());
         assert!(check_slots_advance(MAX_SLOTS_ADVANCE + 1).is_err());
     }
 
     #[test]
     fn bls_disabled_is_todo() {
-        assert!(run(&req_stub_runner("sanity", "blocks", 2)).line().starts_with("fail\ttodo\t"));
+        assert!(run(&CaseRequest::stub("sanity", "blocks", 2)).line().starts_with("fail\ttodo\t"));
     }
 
     #[test]
     fn unknown_handler_is_todo() {
-        assert!(run(&req_stub_runner("sanity", "shuffle", 1)).line().starts_with("fail\ttodo\t"));
+        assert!(run(&CaseRequest::stub("sanity", "shuffle", 1)).line().starts_with("fail\ttodo\t"));
     }
 
     #[test]
     fn blocks_count_mismatch_is_a_bug() {
         // A blocks-shaped request whose field-6 count disagrees with the block
         // inputs it carries is inconsistent: a bug, caught before any I/O.
-        let mut req = req_stub_runner("sanity", "blocks", 1);
+        let mut req = CaseRequest::stub("sanity", "blocks", 1);
         req.blocks_count = 2; // claims two blocks, carries none
         let line = run(&req).line();
         assert!(line.starts_with("fail\tbug\t"), "{line}");
@@ -236,12 +231,16 @@ mod tests {
 
     #[test]
     fn finality_and_random_route_to_blocks() {
-        // Both runners are blocks-shaped, so a dispatched case bottoms out at
-        // the missing-pre bug, confirming the route resolved.
-        for r in ["finality", "random"] {
-            let mut req = req_stub_runner(r, "finality", 1);
-            req.handler = if r == "random" { "random".into() } else { "finality".into() };
-            assert!(run(&req).line().starts_with("fail\tbug\t"), "{r}");
+        // Prove the Blocks route (not Slots) resolved: a blocks_count that disagrees
+        // with the (empty) inputs trips the Blocks-only arity guard — a bug that
+        // names blocks_count, and one the Slots shape never produces. The missing-pre
+        // bug alone can't tell the shapes apart, since both hit decode_pre.
+        for (runner, handler) in [("finality", "finality"), ("random", "random")] {
+            let mut req = CaseRequest::stub(runner, handler, 1);
+            req.blocks_count = 1; // claims one block, carries none
+            let line = run(&req).line();
+            assert!(line.starts_with("fail\tbug\t"), "{runner}: {line}");
+            assert!(line.contains("blocks_count"), "{runner}: {line}");
         }
     }
 
@@ -250,7 +249,7 @@ mod tests {
         // The routing table pins each runner to its one real handler name, so a
         // stray or future handler resolves to todo (the blocks route needs the
         // exact name).
-        assert!(run(&req_stub_runner("finality", "slots", 1)).line().starts_with("fail\ttodo\t"));
-        assert!(run(&req_stub_runner("random", "blocks", 1)).line().starts_with("fail\ttodo\t"));
+        assert!(run(&CaseRequest::stub("finality", "slots", 1)).line().starts_with("fail\ttodo\t"));
+        assert!(run(&CaseRequest::stub("random", "blocks", 1)).line().starts_with("fail\ttodo\t"));
     }
 }
