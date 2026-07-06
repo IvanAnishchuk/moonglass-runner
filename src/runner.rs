@@ -9,6 +9,14 @@ use crate::protocol::{CaseRequest, Verdict};
 use crate::verdict::classify;
 use moonglass_core::containers::BeaconState;
 use moonglass_core::ssz::{Deserialize, Serialize};
+use std::path::Path;
+
+/// Read one input file for a case, mapping an I/O error to a `bug` verdict.
+/// `label` names the file in the detail (e.g. `pre`, `slots_count`,
+/// `block <path>`), the one place the family's read-and-blame-a-bug idiom lives.
+pub(crate) fn read_input(path: &Path, label: &str) -> Result<Vec<u8>, Verdict> {
+    std::fs::read(path).map_err(|e| Verdict::fail("bug", format!("read {label}: {e}")))
+}
 
 /// Read and decode the pre-state for one case. Returns the raw pre bytes (a size
 /// hint for the post-state buffer) and the decoded [`BeaconState`], or a `bug`
@@ -21,10 +29,7 @@ pub(crate) fn decode_pre(
     let Some(pre_path) = &req.pre else {
         return Err(Verdict::fail("bug", format!("{runner} case without a pre state")));
     };
-    let pre_bytes = match std::fs::read(pre_path) {
-        Ok(b) => b,
-        Err(e) => return Err(Verdict::fail("bug", format!("read pre: {e}"))),
-    };
+    let pre_bytes = read_input(pre_path, "pre")?;
     match BeaconState::deserialize(&pre_bytes) {
         Ok(state) => Ok((pre_bytes, state)),
         Err(e) => Err(Verdict::fail("bug", format!("decode pre: {e:?}"))),

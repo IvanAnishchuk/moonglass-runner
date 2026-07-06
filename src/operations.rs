@@ -170,8 +170,8 @@ mod tests {
     /// The 17 wire handler names `operations` dispatches, one per adapter static
     /// (`voluntary_exit_churn` shares `process_voluntary_exit`). Kept in lockstep
     /// with `dispatch_for` so a dropped arm fails the completeness test below.
-    /// `builder_deposit_request`/`builder_exit_request` are served but have no
-    /// gloas fixtures at the vendored vectors version yet.
+    /// `builder_deposit_request` and `builder_exit_request` are served and have
+    /// gloas fixtures in the current vectors (they dispatch and pass).
     const HANDLERS_FOR_TEST: &[&str] = &[
         "attestation",
         "attester_slashing",
@@ -193,18 +193,7 @@ mod tests {
     ];
 
     fn req_stub(handler: &str, bls_setting: u8) -> CaseRequest {
-        CaseRequest {
-            runner: "operations".to_string(),
-            handler: handler.to_string(),
-            pre: None,
-            post: None,
-            bls_setting,
-            blocks_count: 0,
-            fork_epoch: None,
-            inputs: Vec::new(),
-            fork_block: None,
-            execution_valid: false,
-        }
+        CaseRequest::stub("operations", handler, bls_setting)
     }
 
     // --- run() unit tests (no fixture files needed) ---

@@ -17,12 +17,8 @@ pub(crate) fn split_fields(line: &str, want: usize) -> Result<Vec<&str>, String>
 
 /// A single `pyspec_server` request decoded from one tab-delimited stdin line.
 pub(crate) struct CaseRequest {
-    /// Test runner name (e.g. `operations`).
-    // Dispatch happens on the raw first field before parsing (see main.rs
-    // `respond`), so nothing reads the decoded copy until the non-operations
-    // 10-field runners are implemented.
-    // TODO(ivan-epf-research#41): consumed by the non-operations runners.
-    #[allow(dead_code)]
+    /// Test runner name (e.g. `operations`); the `blocks` family reads it to
+    /// route within a runner group (sanity vs finality vs random).
     pub(crate) runner: String,
     /// Handler within the runner (e.g. `attestation`).
     pub(crate) handler: String,
@@ -32,9 +28,8 @@ pub(crate) struct CaseRequest {
     pub(crate) post: Option<PathBuf>,
     /// BLS setting flag from the wire protocol (0 = BLS on, 2 = BLS off).
     pub(crate) bls_setting: u8,
-    /// Number of blocks in the test vector (M1 runners; unused by operations).
-    // TODO(ivan-epf-research#41): consumed by the non-operations runners.
-    #[allow(dead_code)]
+    /// Number of blocks the blocks-shaped runners (`sanity`/`finality`/`random`)
+    /// expect; checked against the input count before applying them.
     pub(crate) blocks_count: usize,
     /// Fork epoch override; `None` when absent.
     // TODO(ivan-epf-research#41): consumed by the non-operations runners.
@@ -80,6 +75,27 @@ impl CaseRequest {
             fork_block: opt_u64(f[8])?,
             execution_valid: f[9] == "1",
         })
+    }
+}
+
+#[cfg(test)]
+impl CaseRequest {
+    /// A fixture-free request for routing / gate unit tests: no pre, post, or
+    /// inputs, so a dispatched case bottoms out at the missing-pre bug. Shared
+    /// across the runner test modules so a new field is added in one place.
+    pub(crate) fn stub(runner: &str, handler: &str, bls_setting: u8) -> Self {
+        Self {
+            runner: runner.to_string(),
+            handler: handler.to_string(),
+            pre: None,
+            post: None,
+            bls_setting,
+            blocks_count: 0,
+            fork_epoch: None,
+            inputs: Vec::new(),
+            fork_block: None,
+            execution_valid: false,
+        }
     }
 }
 

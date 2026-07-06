@@ -21,7 +21,8 @@ etheorem's published behavior.
 | `operations` | implemented | `pass ok`, `pass reject`, `fail mismatch`, `fail reject-valid`, `fail accept-invalid`, `fail todo`, `fail bug` |
 | `ssz_static` | implemented | `pass ok`, `fail mismatch`, `fail reject-valid`, `fail todo` (unknown container), `fail bug` (malformed line / read error / bad root hex) |
 | `epoch_processing` | implemented | `pass ok`, `pass reject`, `fail mismatch`, `fail reject-valid`, `fail accept-invalid`, `fail todo` (unknown handler), `fail bug` |
-| `finality`, `fork_choice`, `random`, `rewards`, `sanity` | planned | `fail todo` |
+| `sanity`, `finality`, `random` | implemented | `pass ok`, `pass reject`, `fail mismatch`, `fail reject-valid`, `fail accept-invalid`, `fail todo` (`bls_setting=2`, unsupported `sanity` handler), `fail bug` |
+| `fork_choice`, `rewards` | planned | `fail todo` |
 | `fork`, `genesis`, `transition` | unmodeled upstream (no moonglass-core API by design) | `fail skip` |
 
 An unknown first field answers `fail todo` with an "unsupported verb" detail. `fail bug` covers harness-contract violations generally: malformed lines of implemented runners, file I/O errors, pre-state decode failures, panics.

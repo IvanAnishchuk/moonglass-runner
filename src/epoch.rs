@@ -96,18 +96,7 @@ mod tests {
     ];
 
     fn req_stub(handler: &str, bls_setting: u8) -> CaseRequest {
-        CaseRequest {
-            runner: "epoch_processing".to_string(),
-            handler: handler.to_string(),
-            pre: None,
-            post: None,
-            bls_setting,
-            blocks_count: 0,
-            fork_epoch: None,
-            inputs: Vec::new(),
-            fork_block: None,
-            execution_valid: false,
-        }
+        CaseRequest::stub("epoch_processing", handler, bls_setting)
     }
 
     #[test]
